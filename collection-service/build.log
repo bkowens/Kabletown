@@ -1,0 +1,2 @@
+# github.com/bowens/kabletown/collection-service/internal/handlers
+internal/handlers/collections.go:49:17: response.PaginatedResponse (value of type func[T any](w http.ResponseWriter, items []T, total int, startIndex int, pageSize int)) is not a type

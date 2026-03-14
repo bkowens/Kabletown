@@ -1,0 +1,743 @@
+openapi: 3.0.3
+info:
+  title: Kabletown API
+  description: | 
+    Kabletown Microservices API - Jellyfin-compatible media server
+    
+    Three core services:
+    - **Auth Service** (8081): Authentication, user management, API keys
+    - **Item Service** (8004): Media metadata queries
+    - **Streaming Service** (8005): HLS and progressive streaming
+  version: 1.0.0
+  contact:
+    name: Kabletown Project
+
+servers:
+  - url: http://localhost:8096
+    description: Nginx reverse proxy (production)
+  - url: http://localhost:8081
+    description: Auth service (direct)
+  - url: http://localhost:8004
+    description: Item service (direct)
+  - url: http://localhost:8005
+    description: Streaming service (direct)
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: | 
+        Use X-Emby-Authorization header with MediaBrowser format:
+        `MediaBrowser Token="abc123...", DeviceId="..."`
+    
+    ApiKey:
+      type: apiKey
+      name: X-MediaBrowser-Token
+      in: header
+      description: Alternative token header format
+
+  schemas:
+    Error:
+      type: object
+      required:
+        - Message
+        - StatusCode
+      properties:
+        Message:
+          type: string
+        StatusCode:
+          type: integer
+
+    BaseItemDto:
+      type: object
+      properties:
+        Id:
+          type: string
+          format: uuid
+          description: GUID identifier
+        Name:
+          type: string
+        Type:
+          type: string
+          enum: [Movie, Episode, Series, Season, Folder, Photo, Audio]
+        IsFolder:
+          type: boolean
+        ParentId:
+          type: string
+          format: uuid
+        TopParentId:
+          type: string
+          format: uuid
+        Path:
+          type: string
+        OfficialRating:
+          type: string
+        Overview:
+          type: string
+        RunTimeTicks:
+          type: integer
+          format: int64
+          description: Duration in 100-nanosecond units
+        ProductionYear:
+          type: integer
+        DateCreated:
+          type: string
+          format: date-time
+        ChannelId:
+          type: string
+        ChannelName:
+          type: string
+        PrimaryImageAspectRatio:
+          type: number
+          format: float
+        CommunityRating:
+          type: number
+          format: float
+        IndexNumber:
+          type: integer
+          description: Episode number
+        ParentIndexNumber:
+          type: integer
+          description: Season number
+        PremiereDate:
+          type: string
+          format: date-time
+        PlayState:
+          $ref: '#/components/schemas/PlayState'
+        UserData:
+          $ref: '#/components/schemas/UserData'
+
+    UserData:
+      type: object
+      properties:
+        IsFavorite:
+          type: boolean
+        IsPlayed:
+          type: boolean
+        PlaybackPositionTicks:
+          type: integer
+          format: int64
+        Rating:
+          type: integer
+        PlayCount:
+          type: integer
+
+    PlayState:
+      type: object
+      properties:
+        IsPlaying:
+          type: boolean
+        IsPaused:
+          type: boolean
+        IsActive:
+          type: boolean
+        CanSeek:
+          type: boolean
+        PositionTicks:
+          type: integer
+          format: int64
+        PlayMethod:
+          type: string
+          enum: [DirectPlay, Transcode, DirectStream]
+
+    QueryResult_BaseItemDto:
+      type: object
+      properties:
+        Items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BaseItemDto'
+        TotalRecordCount:
+          type: integer
+        StartIndex:
+          type: integer
+
+    DeviceRegisterRequest:
+      type: object
+      required:
+        - name
+        - appName
+        - appVersion
+      properties:
+        name:
+          type: string
+        appName:
+          type: string
+        appVersion:
+          type: string
+
+    DeviceRegisterResponse:
+      type: object
+      properties:
+        Id:
+          type: string
+          format: uuid
+        Name:
+          type: string
+        AccessToken:
+          type: string
+          description: API token for authentication
+        AppId:
+          type: string
+          format: uuid
+
+    AuthenticateRequest:
+      type: object
+      required:
+        - Username
+        - Pw
+      properties:
+        Username:
+          type: string
+        Pw:
+          type: string
+          description: Plain-text password (will be hashed)
+
+    AuthenticateResponse:
+      type: object
+      properties:
+        Id:
+          type: string
+          format: uuid
+        Name:
+          type: string
+        AccessToken:
+          type: string
+          description: Session token
+
+---
+# AUTH SERVICE
+paths:
+
+  # /Devices - POST
+  /Devices:
+    post:
+      tags:
+        - Auth Service
+      summary: Register a new device
+      description: Creates a device and API key for client authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRegisterRequest'
+      responses:
+        '200':
+          description: Device registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceRegisterResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    get:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Auth Service
+      summary: List authenticated user's devices
+      responses:
+        '200':
+          description: List of registered devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DeviceRegisterResponse'
+        '401':
+          description: Unauthorized - invalid or missing token
+
+  # /Sessions - POST
+  /Sessions:
+    post:
+      tags:
+        - Auth Service
+      summary: Authenticate user and create session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthenticateRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticateResponse'
+        '401':
+          description: Invalid username or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # /Users - GET
+  /Users:
+    get:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Auth Service
+      summary: Get current user profile
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BaseItemDto'
+        '401':
+          description: Unauthorized
+        '404':
+          description: User not found
+
+---
+# ITEM SERVICE
+  /Items:
+    get:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Item Service
+      summary: Query items with complex filters (InternalItemsQuery)
+      description: | 
+        Supports 80+ query parameters for filtering, sorting, and pagination.
+        Key parameters:
+        - TopParentId: Filter by library/root folder
+        - IncludeItemTypes: Filter by MediaBrowser type
+        - OrderBy: Sort by field, direction
+        - StartIndex, Limit: Pagination
+        - UserId: Attach user data (playstate)
+      parameters:
+        - name: TopParentId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter by parent folder ID
+        - name: IncludeItemTypes
+          in: query
+          schema:
+            type: string
+            example: Movie,Episode
+          description: Comma-separated list of item types
+        - name: ExcludeItemTypes
+          in: query
+          schema:
+            type: string
+          description: Comma-separated list of types to exclude
+        - name: OrderBy
+          in: query
+          schema:
+            type: string
+            example: DateCreated,Descending
+          description: Field and direction (comma-separated pairs)
+        - name: StartIndex
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Paging start index
+        - name: Limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 20
+          description: Number of items to return
+        - name: UserId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Attach user data for this user
+        - name: Recursive
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include child folders recursively
+        - name: IsFavorite
+          in: query
+          schema:
+            type: boolean
+          description: Filter by favorite status
+        - name: IsPlayed
+          in: query
+          schema:
+            type: boolean
+          description: Filter by play status
+        - name: GenreIds
+          in: query
+          schema:
+            type: string
+          description: Filter by genre (P6)
+        - name: StudioIds
+          in: query
+          schema:
+            type: string
+          description: Filter by studio (P6)
+      responses:
+        '200':
+          description: Query results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResult_BaseItemDto'
+        '401':
+          description: Unauthorized (if auth required)
+
+
+# /Items/{itemId} - GET
+  /Items/{itemId}:
+    get:
+      tags:
+        - Item Service
+      summary: Get single item by ID
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Item GUID
+        - name: UserId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Attach user data for this user
+      responses:
+        '200':
+          description: Item details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BaseItemDto'
+        '404':
+          description: Item not found
+        '500':
+          description: Internal server error
+
+    delete:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Item Service
+      summary: Delete item (admin only)
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Item deleted
+        '401':
+          description: Unauthorized
+        '403':
+          description: Admin required
+        '404':
+          description: Item not found
+
+# /Items/RecentlyAdded - GET
+  /Items/RecentlyAdded:
+    get:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Item Service
+      summary: Get recently added items
+      description: Returns items sorted by DateCreated descending with user data
+      parameters:
+        - name: UserId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          required: true
+        - name: Limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: TopParentId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter to specific library
+      responses:
+        '200':
+          description: Recently added items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResult_BaseItemDto'
+
+# /Items/NextEpisode - GET
+  /Items/NextEpisode:
+    get:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Item Service
+      summary: Get next unwatched episode
+      description: Returns next episode to watch for a given series
+      parameters:
+        - name: UserId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          required: true
+        - name: SeriesId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Parent series ID
+      responses:
+        '200':
+          description: Next episode
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BaseItemDto'
+        '404':
+          description: No next episode found
+
+---
+# STREAMING SERVICE
+  /Videos/{itemId}/master.m3u8:
+    get:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Streaming Service
+      summary: Get HLS master playlist
+      description: | 
+        Returns adaptive bitrate master playlist with variant stream options.
+        FFmpeg process started if transcoding required.
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: MediaSourceId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Select media source (alternative videos)
+        - name: StartTimeTicks
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: Start position (0 = beginning)
+        - name: DeviceId
+          in: query
+          schema:
+            type: string
+          description: Used to stop encoding when request stops
+        - name: VideoCodec
+          in: query
+          schema:
+            type: string
+            enum: [h264, hevc, av1, copy]
+          description: Target video codec
+        - name: AudioCodec
+          in: query
+          schema:
+            type: string
+            enum: [aac, ac3, eac3, mp3, copy]
+          description: Target audio codec
+        - name: VideoBitRate
+          in: query
+          schema:
+            type: integer
+          description: Target video bitrate (bps)
+        - name: MaxWidth
+          in: query
+          schema:
+            type: integer
+          description: Maximum video width
+        - name: MaxHeight
+          in: query
+          schema:
+            type: integer
+          description: Maximum video height
+        - name: TranscodeReasons
+          in: query
+          schema:
+            type: string
+            example: VideoCodecNotSupported,ContainerBitrateExceedsLimit
+          description: Client-side transcoding hints
+      responses:
+        '200':
+          description: Master playlist
+          content:
+            application/vnd.apple.mpegurl:
+              schema:
+                type: string
+                description: M3U8 playlist content
+        '400':
+          description: Invalid parameters
+        '401':
+          description: Unauthorized
+        '404':
+          description: Item not found
+
+# /Videos/{itemId}/hls/{playlistId}/{segmentId}.{segmentContainer}
+  /Videos/{itemId}/hls/{playlistId}/{segmentId}.{segmentContainer}:
+    get:
+      tags:
+        - Streaming Service
+      summary: Get HLS segment
+      description: | 
+        Returns individual HLS video segment.
+        Segment path tracked in TranscodeManager for job lifecycle.
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: playlistId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Playlist identifier
+        - name: segmentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Segment number
+        - name: segmentContainer
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [ts, mp4, m4s]
+          description: Segment file extension
+      responses:
+        '200':
+          description: Video segment
+          content:
+            video/mp2t:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Segment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+# /Videos/{itemId}/stream
+  /Videos/{itemId}/stream:
+    get:
+      security:
+        - BearerAuth: []
+        - ApiKey: []
+      tags:
+        - Streaming Service
+      summary: Progressive video stream
+      description: | 
+        Single file progressive download or transcode.
+        Supports stream copy (fast) or full transcode.
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Static
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: If true, stream copy only (no transcode)
+        - name: StartTimeTicks
+          in: query
+          schema:
+            type: integer
+            format: int64
+          description: Start position
+        - name: VideoCodec
+          in: query
+          schema:
+            type: string
+          description: Target codec (if Static=false)
+        - name: AudioCodec
+          in: query
+          schema:
+            type: string
+          description: Target codec (if Static=false)
+        - name: MediaSourceId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Media file or transcoded stream
+          content:
+            video/*:  # Content type based on container
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+        '404':
+          description: Item not found
+
+# GET /health (all services)
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok

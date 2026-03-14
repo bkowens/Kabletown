@@ -1,0 +1,281 @@
+version: '3.8'
+
+services:
+  # Database
+  db:
+    image: mysql:8.0
+    container_name: kabletown-db
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_password
+      - MYSQL_DATABASE=kabletown
+      - MYSQL_USER=kabletown
+      - MYSQL_PASSWORD=kabletown_password
+      - TZ=UTC
+    volumes:
+      - kabletown-data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - kabletown-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # API Gateway (Nginx)
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: kabletown-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      auth-service: { condition: service_healthy }
+      item-service: { condition: service_healthy }
+      streaming-service: { condition: service_healthy }
+      transcode-service: { condition: service_healthy }
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+  # Auth Service
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: kabletown-auth
+    ports:
+      - "8001:8001"
+    environment:
+      - GO_ENV=production
+      - AUTH_SERVICE_PORT=8001
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Item Service
+  item-service:
+    build:
+      context: ./item-service
+      dockerfile: Dockerfile
+    container_name: kabletown-item
+    ports:
+      - "8002:8002"
+    environment:
+      - GO_ENV=production
+      - ITEM_SERVICE_PORT=8002
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+      - GATEWAY_URL=http://gateway-service:8013
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Streaming Service
+  streaming-service:
+    build:
+      context: ./streaming-service
+      dockerfile: Dockerfile
+    container_name: kabletown-streaming
+    ports:
+      - "8003:8003"
+    environment:
+      - GO_ENV=production
+      - STREAMING_SERVICE_PORT=8003
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+      - TRANCODE_SERVICE_URL=http://transcode-service:8004
+    depends_on:
+      db:
+        condition: service_healthy
+      transcode-service:
+        condition: service_healthy
+    volumes:
+      - transcoded:/tmp/transcoding
+    networks:
+      - kabletown-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Transcode Service
+  transcode-service:
+    build:
+      context: ./transcode-service
+      dockerfile: Dockerfile
+    container_name: kabletown-transcode
+    ports:
+      - "8004:8004"
+    environment:
+      - GO_ENV=production
+      - TRANCODE_SERVICE_PORT=8004
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+      - TRANSCODING_PATH=/tmp/transcoding
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - transcoded:/tmp/transcoding
+      - media:/media:ro
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+  # User Service
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: kabletown-user
+    ports:
+      - "8007:8007"
+    environment:
+      - GO_ENV=production
+      - USER_SERVICE_PORT=8007
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+  # Collection Service
+  collection-service:
+    build:
+      context: ./collection-service
+      dockerfile: Dockerfile
+    container_name: kabletown-collection
+    ports:
+      - "8008:8008"
+    environment:
+      - GO_ENV=production
+      - COLLECTION_SERVICE_PORT=8008
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+  # Playlist Service
+  playlist-service:
+    build:
+      context: ./playlist-service
+      dockerfile: Dockerfile
+    container_name: kabletown-playlist
+    ports:
+      - "8009:8009"
+    environment:
+      - GO_ENV=production
+      - PLAYLIST_SERVICE_PORT=8009
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+  # Library Service
+  library-service:
+    build:
+      context: ./library-service
+      dockerfile: Dockerfile
+    container_name: kabletown-library
+    ports:
+      - "8010:8010"
+    environment:
+      - GO_ENV=production
+      - LIBRARY_SERVICE_PORT=8010
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+      - MEDIA_PATH=/media
+    volumes:
+      - media:/media:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+  # Search Service
+  search-service:
+    build:
+      context: ./search-service
+      dockerfile: Dockerfile
+    container_name: kabletown-search
+    ports:
+      - "8006:8006"
+    environment:
+      - GO_ENV=production
+      - SEARCH_SERVICE_PORT=8006
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+  # Metadata Service
+  metadata-service:
+    build:
+      context: ./metadata-service
+      dockerfile: Dockerfile
+    container_name: kabletown-metadata
+    ports:
+      - "8005:8005"
+    environment:
+      - GO_ENV=production
+      - METADATA_SERVICE_PORT=8005
+      - DB_DSN=kabletown:kabletown_password@tcp(db:3306)/kabletown?parseTime=true
+      - TMDB_API_KEY=
+      - TVDB_API_KEY=
+    volumes:
+      - metadata-cache:/cache
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - kabletown-net
+    restart: unless-stopped
+
+volumes:
+  kabletown-data:
+    driver: local
+  transcoded:
+    driver: local
+  media:
+    driver: local
+    external: true  # Mount your media folder here
+  metadata-cache:
+    driver: local
+
+networks:
+  kabletown-net:
+    driver: bridge
