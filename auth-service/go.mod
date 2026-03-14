@@ -2,15 +2,13 @@ module github.com/jellyfinhanced/auth-service
 
 go 1.22
 
-toolchain go1.22.2
-
 require (
-	github.com/go-chi/chi/v5 v5.0.10
-	github.com/go-chi/cors v1.2.2
+	github.com/go-chi/chi/v5 v5.2.5
+	github.com/go-chi/cors v1.2.1
 	github.com/google/uuid v1.6.0
-	github.com/jellyfinhanced/shared v0.0.0-00010101000000-000000000000
+	github.com/jellyfinhanced/shared v0.0.0
 	github.com/jmoiron/sqlx v1.4.0
-	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5
+	golang.org/x/crypto v0.31.0
 )
 
 require (

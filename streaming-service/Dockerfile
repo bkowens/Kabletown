@@ -2,23 +2,18 @@ FROM golang:1.22-alpine AS builder
 
 WORKDIR /build
 
-RUN apk add --no-cache gcc musl-dev
+COPY shared/ shared/
+COPY streaming-service/ streaming-service/
 
-COPY go.mod go.sum ./
+WORKDIR /build/streaming-service
+
 RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/streaming-service ./cmd/server
 
-COPY . .
-
-RUN go build -ldflags="-s -w" -o server ./cmd/server
-
-FROM alpine:3.19
-
+FROM alpine:latest
 RUN apk add --no-cache ca-certificates tzdata
-
 WORKDIR /app
+COPY --from=builder /app/streaming-service .
 
-COPY --from=builder /build/server /app/server
-
-EXPOSE 8000
-
-CMD ["/app/server"]
+EXPOSE 8018
+CMD ["./streaming-service"]

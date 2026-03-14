@@ -1,16 +1,19 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /build
 
-COPY go.mod go.sum* ./
-RUN go mod download || true
+COPY shared/ shared/
+COPY playlist-service/ playlist-service/
 
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o playlist-service ./cmd/server
+WORKDIR /build/playlist-service
+
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/playlist-service ./cmd/server
 
 FROM alpine:latest
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY --from=builder /build/playlist-service .
+COPY --from=builder /app/playlist-service .
 
-EXPOSE 8012
+EXPOSE 8013
 CMD ["./playlist-service"]

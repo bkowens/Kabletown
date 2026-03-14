@@ -1,29 +1,19 @@
-# Metadata Service Dockerfile
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
+WORKDIR /build
+
+COPY shared/ shared/
+COPY metadata-service/ metadata-service/
+
+WORKDIR /build/metadata-service
+
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/metadata-service ./cmd/server
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-
-# Install dependencies for MySQL driver
-RUN apk add --no-cache gcc musl-dev
-
-# Copy go mod files
-COPY go.mod go.sum ./
-RUN go mod download && go mod verify
-
-# Copy source code
-COPY . .
-
-# Build
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o metadata-service ./cmd/server
-
-# Runtime stage
-FROM alpine:3.18
-WORKDIR /app
-
-RUN apk --no-cache add ca-certificates
-
 COPY --from=builder /app/metadata-service .
 
 EXPOSE 8008
-
-ENTRYPOINT ["./metadata-service"]
+CMD ["./metadata-service"]

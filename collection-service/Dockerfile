@@ -1,16 +1,19 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
 WORKDIR /build
 
-COPY go.mod go.sum* ./
-RUN go mod download || true
+COPY shared/ shared/
+COPY collection-service/ collection-service/
 
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o collection-service ./cmd/server
+WORKDIR /build/collection-service
+
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/collection-service ./cmd/server
 
 FROM alpine:latest
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY --from=builder /build/collection-service .
+COPY --from=builder /app/collection-service .
 
-EXPOSE 8011
+EXPOSE 8012
 CMD ["./collection-service"]

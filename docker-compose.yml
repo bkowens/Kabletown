@@ -28,6 +28,8 @@ services:
       - playlist-service
       - notification-service
       - plugin-service
+      - item-service
+      - streaming-service
     networks:
       - kabletown
     restart: unless-stopped
@@ -59,16 +61,17 @@ services:
   # Auth Service (8001)
   auth-service:
     build:
-      context: ./auth-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: auth-service/Dockerfile
     container_name: kabletown-auth
     environment:
-      - PORT=8001
+      - SERVICE_PORT=8001
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -79,16 +82,17 @@ services:
   # User Service (8002)
   user-service:
     build:
-      context: ./user-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: user-service/Dockerfile
     container_name: kabletown-user
     environment:
-      - PORT=8002
+      - SERVICE_PORT=8002
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -99,16 +103,17 @@ services:
   # Library Service (8003)
   library-service:
     build:
-      context: ./library-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: library-service/Dockerfile
     container_name: kabletown-library
     environment:
-      - PORT=8003
+      - SERVICE_PORT=8003
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -119,16 +124,12 @@ services:
   # Playstate Service (8004)
   playstate-service:
     build:
-      context: ./playstate-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: playstate-service/Dockerfile
     container_name: kabletown-playstate
     environment:
-      - PORT=8004
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=kabletown
-      - DB_PASS=kabletown
-      - DB_NAME=kabletown
+      - PLAYSTATE_SERVICE_PORT=8004
+      - DB_DSN=kabletown:kabletown@tcp(mysql:3306)/kabletown?parseTime=true
     depends_on:
       mysql:
         condition: service_healthy
@@ -139,16 +140,17 @@ services:
   # Media Service (8005)
   media-service:
     build:
-      context: ./media-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: media-service/Dockerfile
     container_name: kabletown-media
     environment:
-      - PORT=8005
+      - SERVICE_PORT=8005
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -159,16 +161,12 @@ services:
   # Stream Service (8006)
   stream-service:
     build:
-      context: ./stream-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: stream-service/Dockerfile
     container_name: kabletown-stream
     environment:
-      - PORT=8006
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=kabletown
-      - DB_PASS=kabletown
-      - DB_NAME=kabletown
+      - SERVICE_PORT=8006
+      - DB_DSN=kabletown:kabletown@tcp(mysql:3306)/kabletown?parseTime=true
     depends_on:
       mysql:
         condition: service_healthy
@@ -179,16 +177,17 @@ services:
   # Session Service (8007)
   session-service:
     build:
-      context: ./session-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: session-service/Dockerfile
     container_name: kabletown-session
     environment:
-      - PORT=8007
+      - SERVICE_PORT=8007
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -199,16 +198,12 @@ services:
   # Metadata Service (8008)
   metadata-service:
     build:
-      context: ./metadata-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: metadata-service/Dockerfile
     container_name: kabletown-metadata
     environment:
-      - PORT=8008
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=kabletown
-      - DB_PASS=kabletown
-      - DB_NAME=kabletown
+      - SERVICE_PORT=8008
+      - DB_DSN=kabletown:kabletown@tcp(mysql:3306)/kabletown?parseTime=true
     depends_on:
       mysql:
         condition: service_healthy
@@ -219,16 +214,12 @@ services:
   # Content Service (8009)
   content-service:
     build:
-      context: ./content-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: content-service/Dockerfile
     container_name: kabletown-content
     environment:
-      - PORT=8009
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=kabletown
-      - DB_PASS=kabletown
-      - DB_NAME=kabletown
+      - SERVICE_PORT=8009
+      - DB_DSN=kabletown:kabletown@tcp(mysql:3306)/kabletown?parseTime=true
     depends_on:
       mysql:
         condition: service_healthy
@@ -239,16 +230,17 @@ services:
   # System Service (8010)
   system-service:
     build:
-      context: ./system-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: system-service/Dockerfile
     container_name: kabletown-system
     environment:
-      - PORT=8010
+      - SERVICE_PORT=8010
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -259,12 +251,12 @@ services:
   # Transcode Service (8011)
   transcode-service:
     build:
-      context: ./transcode-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: transcode-service/Dockerfile
     container_name: kabletown-transcode
     environment:
       - PORT=8011
-      - TRANCODE_PORT=8011
+      - TRANSCODE_PORT=8011
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
@@ -282,16 +274,17 @@ services:
   # Collection Service (8012)
   collection-service:
     build:
-      context: ./collection-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: collection-service/Dockerfile
     container_name: kabletown-collection
     environment:
-      - PORT=8012
+      - SERVICE_PORT=8012
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -302,16 +295,17 @@ services:
   # Playlist Service (8013)
   playlist-service:
     build:
-      context: ./playlist-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: playlist-service/Dockerfile
     container_name: kabletown-playlist
     environment:
-      - PORT=8013
+      - SERVICE_PORT=8013
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     depends_on:
       mysql:
         condition: service_healthy
@@ -322,16 +316,17 @@ services:
   # Notification Service (8014)
   notification-service:
     build:
-      context: ./notification-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: notification-service/Dockerfile
     container_name: kabletown-notification
     environment:
-      - PORT=8014
+      - SERVICE_PORT=8014
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=kabletown
-      - DB_PASS=kabletown
+      - DB_PASSWORD=kabletown
       - DB_NAME=kabletown
+      - SERVER_ID=00000000-0000-0000-0000-000000000001
     networks:
       - kabletown
     restart: unless-stopped
@@ -339,16 +334,11 @@ services:
   # Plugin Service (8015)
   plugin-service:
     build:
-      context: ./plugin-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: plugin-service/Dockerfile
     container_name: kabletown-plugin
     environment:
-      - PORT=8015
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=kabletown
-      - DB_PASS=kabletown
-      - DB_NAME=kabletown
+      - SERVICE_PORT=8015
     networks:
       - kabletown
     restart: unless-stopped
@@ -356,16 +346,40 @@ services:
   # Search Service (8016)
   search-service:
     build:
-      context: ./search-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: search-service/Dockerfile
     container_name: kabletown-search
     environment:
-      - PORT=8016
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=kabletown
-      - DB_PASS=kabletown
-      - DB_NAME=kabletown
+      - SERVICE_PORT=8016
+    networks:
+      - kabletown
+    restart: unless-stopped
+
+  # Item Service (8017)
+  item-service:
+    build:
+      context: .
+      dockerfile: item-service/Dockerfile
+    container_name: kabletown-item
+    environment:
+      - ITEM_SERVICE_PORT=8017
+      - DB_DSN=kabletown:kabletown@tcp(mysql:3306)/kabletown?parseTime=true
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - kabletown
+    restart: unless-stopped
+
+  # Streaming Service (8018)
+  streaming-service:
+    build:
+      context: .
+      dockerfile: streaming-service/Dockerfile
+    container_name: kabletown-streaming
+    environment:
+      - STREAMING_SERVICE_PORT=8018
+      - DB_DSN=kabletown:kabletown@tcp(mysql:3306)/kabletown?parseTime=true
     depends_on:
       mysql:
         condition: service_healthy

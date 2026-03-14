@@ -1,0 +1,18 @@
+# Compiled binaries
+*/server
+*/server.exe
+*-service/server
+*-service/*.exe
+
+# Build output
+dist/
+bin/
+
+# Environment files
+.env
+.env.local
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db

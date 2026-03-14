@@ -1,21 +1,21 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache ffmpeg gcc musl-dev
 
 WORKDIR /build
 
-# Install FFmpeg
-RUN apk add --no-cache ffmpeg
+COPY shared/ shared/
+COPY transcode-service/ transcode-service/
 
-COPY go.mod go.sum* ./
-RUN go mod download || true
+WORKDIR /build/transcode-service
 
-COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -o transcode-service ./cmd/server
+RUN go mod download
+RUN CGO_ENABLED=1 GOOS=linux go build -o /app/transcode-service ./cmd/server
 
 FROM alpine:latest
-RUN apk add --no-cache ffmpeg ca-certificates
+RUN apk add --no-cache ffmpeg ca-certificates tzdata
 WORKDIR /app
-COPY --from=builder /build/transcode-service .
-COPY --from=builder /build/go.mod .
+COPY --from=builder /app/transcode-service .
 
 EXPOSE 8011
 CMD ["./transcode-service"]
