@@ -46,12 +46,16 @@ func (h *Handler) RegisterRoutes(r chi.Router, lookup auth.DeviceLookupFunc) {
 		"/healthz",
 		"/Users/Public",
 		"/Users/AuthenticateByName",
+		"/Users/AuthenticateWithQuickConnect",
 		"/Users/ForgotPassword",
 		"/Users/ForgotPasswordPin",
 		"/Startup/Configuration",
 		"/Startup/Complete",
 		"/Startup/RemoteAccess",
 		"/Startup/User",
+		"/QuickConnect/Enabled",
+		"/QuickConnect/Initiate",
+		"/QuickConnect/Connect",
 		"/System/Info/Public",
 		"/Branding/Configuration",
 	}
@@ -64,6 +68,23 @@ func (h *Handler) RegisterRoutes(r chi.Router, lookup auth.DeviceLookupFunc) {
 	r.Post("/Users/AuthenticateWithQuickConnect", h.AuthenticateWithQuickConnect)
 	r.Get("/Users/Public", h.GetPublicUsers)
 
+	// Startup wizard (anonymous)
+	r.Get("/Startup/Configuration", h.StartupConfiguration)
+	r.Post("/Startup/Complete", h.StartupComplete)
+	r.Get("/Startup/RemoteAccess", h.GetRemoteAccess)
+	r.Post("/Startup/RemoteAccess", h.SetRemoteAccess)
+	r.Get("/Startup/User", h.GetStartupUser)
+	r.Post("/Startup/User", h.SetStartupUser)
+
+	// QuickConnect (anonymous initiation / polling)
+	r.Get("/QuickConnect/Enabled", h.QuickConnectEnabled)
+	r.Post("/QuickConnect/Initiate", h.QuickConnectInitiate)
+	r.Post("/QuickConnect/Connect", h.QuickConnectConnect)
+
+	// Forgot password (anonymous)
+	r.Post("/Users/ForgotPassword", h.ForgotPassword)
+	r.Post("/Users/ForgotPasswordPin", h.ForgotPasswordPin)
+
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMiddleware)
@@ -74,6 +95,9 @@ func (h *Handler) RegisterRoutes(r chi.Router, lookup auth.DeviceLookupFunc) {
 		r.Get("/Auth/Keys", auth.RequireAdmin(http.HandlerFunc(h.ListApiKeys)).ServeHTTP)
 		r.Post("/Auth/Keys", auth.RequireAdmin(http.HandlerFunc(h.CreateApiKey)).ServeHTTP)
 		r.Delete("/Auth/Keys/{key}", auth.RequireAdmin(http.HandlerFunc(h.RevokeApiKey)).ServeHTTP)
+
+		// QuickConnect authorize (must be authenticated — caller approves a pending code)
+		r.Post("/QuickConnect/Authorize", h.QuickConnectAuthorize)
 	})
 }
 
@@ -181,12 +205,6 @@ func (h *Handler) AuthenticateUser(w http.ResponseWriter, r *http.Request) {
 		ServerId:    h.serverID,
 	}
 	response.JSON(w, http.StatusOK, result)
-}
-
-// AuthenticateWithQuickConnect handles POST /Users/AuthenticateWithQuickConnect.
-// This is a placeholder returning 501 Not Implemented.
-func (h *Handler) AuthenticateWithQuickConnect(w http.ResponseWriter, r *http.Request) {
-	response.Error(w, http.StatusNotImplemented, "QuickConnect is not implemented")
 }
 
 // GetPublicUsers handles GET /Users/Public.

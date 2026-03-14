@@ -1,4 +1,4 @@
-module github.com/bowens/kabletown/shared
+module github.com/jellyfinhanced/shared
 
 go 1.22
 

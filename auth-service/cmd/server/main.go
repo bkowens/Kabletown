@@ -23,7 +23,6 @@ import (
 )
 
 func main() {
-	// --- Configuration from environment variables ---
 	dbHost := getEnv("DB_HOST", "localhost")
 	dbPort := getEnv("DB_PORT", "3306")
 	dbUser := getEnv("DB_USER", "jellyfin")
@@ -32,10 +31,8 @@ func main() {
 	servicePort := getEnv("SERVICE_PORT", "8001")
 	serverID := getEnv("SERVER_ID", "00000000-0000-0000-0000-000000000000")
 
-	// --- Register server UUID for response headers ---
 	response.SetServerID(serverID)
 
-	// --- Database connection ---
 	sqlxDB, err := sharedDB.Connect(sharedDB.Config{
 		Host:     dbHost,
 		Port:     dbPort,
@@ -48,23 +45,18 @@ func main() {
 	}
 	defer sqlxDB.Close()
 
-	// Run schema migrations on startup.
 	if err := db.RunMigrations(sqlxDB); err != nil {
 		log.Fatalf("auth-service: migrations failed: %v", err)
 	}
 
-	// --- Handler and token resolver ---
 	h := handlers.New(sqlxDB, serverID)
 	resolver := db.NewTokenResolver(sqlxDB)
 
-	// DeviceLookupFunc wraps the token resolver for the auth middleware.
 	lookup := auth.DeviceLookupFunc(func(token string) (string, bool, error) {
 		return resolver.ResolveToken(token)
 	})
 
-	// --- Router ---
 	r := chi.NewRouter()
-
 	r.Use(chiMiddleware.RealIP)
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
@@ -78,17 +70,14 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Health check — no auth required.
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
 	})
 
-	// Register all service routes.
 	h.RegisterRoutes(r, lookup)
 
-	// --- HTTP server with graceful shutdown ---
 	addr := ":" + servicePort
 	srv := &http.Server{
 		Addr:         addr,
@@ -98,14 +87,12 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// Start server in a goroutine so we can listen for shutdown signals.
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("auth-service: listening on %s (server-id=%s)", addr, serverID)
 		serverErr <- srv.ListenAndServe()
 	}()
 
-	// Wait for SIGINT or SIGTERM.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -127,7 +114,6 @@ func main() {
 	fmt.Println("auth-service: shutdown complete")
 }
 
-// getEnv returns the value of an environment variable or a fallback default.
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
