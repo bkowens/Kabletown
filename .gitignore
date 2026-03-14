@@ -13,6 +13,10 @@ bin/
 .env.local
 *.env
 
+# Test coverage
+coverage.out
+*.coverprofile
+
 # OS files
 .DS_Store
 Thumbs.db

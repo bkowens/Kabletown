@@ -215,7 +215,7 @@ func (b *SQLBuilder) buildGenreFilter() {
 		}
 		// Use JSON_CONTAINS for array matching
 		b.whereClauses = append(b.whereClauses,
-			fmt.Sprintf("(JSON_CONTAINS(i.Genres, ?))",
+			fmt.Sprintf("(JSON_CONTAINS(i.Genres, %s))",
 				strings.Join(placeholders, ", ")))
 	}
 }
@@ -232,7 +232,7 @@ func (b *SQLBuilder) buildStudioFilter() {
 			b.params = append(b.params, s)
 		}
 		b.whereClauses = append(b.whereClauses,
-			fmt.Sprintf("(JSON_CONTAINS(i.Studios, ?))",
+			fmt.Sprintf("(JSON_CONTAINS(i.Studios, %s))",
 				strings.Join(placeholders, ", ")))
 	}
 }

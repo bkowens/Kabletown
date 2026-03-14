@@ -1,6 +1,8 @@
 // Package dto contains shared data transfer objects used across Kabletown services.
 package dto
 
+import "fmt"
+
 // PagedResult[T] is a generic wrapper for paginated query results
 type PagedResult[T any] struct {
 	// Items is the slice of results for this page
@@ -106,7 +108,7 @@ func (p PagedResult[T]) SliceRange() string {
 		display = p.TotalRecordCount
 	}
 	
-	return string(p.StartIndex) + "-" + string(display) + " of " + string(p.TotalRecordCount)
+	return fmt.Sprint(p.StartIndex) + "-" + fmt.Sprint(display) + " of " + fmt.Sprint(p.TotalRecordCount)
 }
 
 // Map transforms a PagedResult[T] to a PagedResult[U]
