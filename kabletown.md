@@ -1925,7 +1925,7 @@ import (
     chimiddleware "github.com/go-chi/chi/v5/middleware"
     "github.com/jellyfinhanced/shared/auth"
     "github.com/jellyfinhanced/shared/db"
-    "github.com/jellyfinhanced/shared/middleware"
+    "github.com/jellyfinhanced/shared/auth"
     "github.com/jellyfinhanced/shared/response"
 
     "github.com/jellyfinhanced/{service}/internal/handlers"

@@ -42,7 +42,7 @@ type SessionCapability struct {
 	SupportsPersistentId     bool     `json:"SupportsPersistentId"`
 }
 
-func (c *SessionCapability) toJSON() string {
+func (c *SessionCapability) ToJSON() string {
 	data, _ := json.Marshal(c)
 	return string(data)
 }

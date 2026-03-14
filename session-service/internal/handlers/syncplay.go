@@ -3,185 +3,189 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log"
+	"math/rand"
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/jellyfinhanced/shared/logger"
+	"github.com/jellyfinhanced/shared/response"
 )
 
-var syncPlayLog = logger.NewLogger("syncplay-handler")
-
+// SyncPlayHandler handles SyncPlay group requests.
 type SyncPlayHandler struct {
-	db  *sql.DB
+	db *sql.DB
 }
 
+// NewSyncPlayHandler creates a new SyncPlayHandler.
 func NewSyncPlayHandler(dbPool *sql.DB) *SyncPlayHandler {
 	return &SyncPlayHandler{db: dbPool}
 }
 
-// GetGroups returns all sync play groups
+// GetGroups returns all active sync play groups.
 func (h *SyncPlayHandler) GetGroups(w http.ResponseWriter, r *http.Request) {
 	query := `SELECT id, name, created_at, is_active FROM syncplay_groups WHERE is_active = 1`
-	
+
 	rows, err := h.db.QueryContext(r.Context(), query)
 	if err != nil {
-		syncPlayLog.Error("Failed to query syncplay groups", "error", err)
-		http.Error(w, "Failed to retrieve groups", http.StatusInternalServerError)
+		log.Printf("syncplay-handler: GetGroups: query failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to retrieve groups")
 		return
 	}
 	defer rows.Close()
 
 	groups := []map[string]interface{}{}
 	for rows.Next() {
-		var g map[string]interface{}
+		var id, name string
+		var createdAt time.Time
 		var isActive bool
-		err := rows.Scan(&g["id"], &g["name"], &g["created_at"], &isActive)
-		if err != nil {
+		if err := rows.Scan(&id, &name, &createdAt, &isActive); err != nil {
 			continue
 		}
-		g["is_active"] = isActive
-		groups = append(groups, g)
+		groups = append(groups, map[string]interface{}{
+			"Id":        id,
+			"Name":      name,
+			"CreatedAt": createdAt,
+			"IsActive":  isActive,
+		})
 	}
 
-	render.JSON(w, r, groups)
+	response.WriteJSON(w, http.StatusOK, groups)
 }
 
-// CreateGroup creates a new sync play group
+// CreateGroup creates a new sync play group.
 func (h *SyncPlayHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	var req map[string]interface{}
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	groupName := req["name"].(string)
-	if groupName == "" {
-		groupName = "Party"
+	groupName := "Party"
+	if name, ok := req["Name"].(string); ok && name != "" {
+		groupName = name
 	}
 
-	groupID := generateUUID()
+	groupID := generateGroupID()
 	accessCode := generateAccessCode()
 
 	insertQuery := `INSERT INTO syncplay_groups (id, name, access_code, created_at, is_active)
 		VALUES (?, ?, ?, ?, ?)`
-	
+
 	_, err := h.db.ExecContext(r.Context(), insertQuery,
 		groupID, groupName, accessCode, time.Now(), true)
 	if err != nil {
-		syncPlayLog.Error("Failed to create syncplay group", "error", err)
-		http.Error(w, "Failed to create group", http.StatusInternalServerError)
+		log.Printf("syncplay-handler: CreateGroup: insert failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to create group")
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
-	render.JSON(w, r, map[string]interface{}{
-		"id":          groupID,
-		"name":        groupName,
-		"access_code": accessCode,
-		"is_active":   true,
+	response.WriteJSON(w, http.StatusCreated, map[string]interface{}{
+		"Id":         groupID,
+		"Name":       groupName,
+		"AccessCode": accessCode,
+		"IsActive":   true,
 	})
 }
 
-// JoinGroup adds a session to a sync play group
+// JoinGroup adds a session to a sync play group.
 func (h *SyncPlayHandler) JoinGroup(w http.ResponseWriter, r *http.Request) {
 	var req map[string]interface{}
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	sessionID := req["session_id"].(string)
-	groupID := req["group_id"].(string)
-	accessCode := req["access_code"].(string)
+	sessionID, _ := req["SessionId"].(string)
+	groupID, _ := req["GroupId"].(string)
+	accessCode, _ := req["AccessCode"].(string)
 
-	// Verify access code if provided
 	var storedAccessCode string
-	err := h.db.QueryRowContext(r.Context(), 
+	err := h.db.QueryRowContext(r.Context(),
 		`SELECT access_code FROM syncplay_groups WHERE id = ? AND is_active = 1`,
 		groupID).Scan(&storedAccessCode)
 	if err == sql.ErrNoRows {
-		http.Error(w, "Group not found", http.StatusNotFound)
+		response.WriteError(w, http.StatusNotFound, "Group not found")
 		return
 	}
 	if err != nil {
-		syncPlayLog.Error("Failed to verify group", "error", err)
-		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
+		log.Printf("syncplay-handler: JoinGroup: query failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to verify group")
 		return
 	}
 
 	if accessCode != "" && accessCode != storedAccessCode {
-		http.Error(w, "Invalid access code", http.StatusUnauthorized)
+		response.WriteError(w, http.StatusUnauthorized, "Invalid access code")
 		return
 	}
 
-	// Add session to group
 	insertQuery := `INSERT INTO syncplay_group_members (group_id, session_id, joined_at)
 		VALUES (?, ?, ?)
 		ON DUPLICATE KEY UPDATE joined_at = ?`
 	_, err = h.db.ExecContext(r.Context(), insertQuery, groupID, sessionID, time.Now(), time.Now())
 	if err != nil {
-		syncPlayLog.Error("Failed to add session to group", "error", err)
-		http.Error(w, "Failed to join group", http.StatusInternalServerError)
+		log.Printf("syncplay-handler: JoinGroup: insert failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to join group")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// LeaveGroup removes a session from a sync play group
+// LeaveGroup removes a session from a sync play group.
 func (h *SyncPlayHandler) LeaveGroup(w http.ResponseWriter, r *http.Request) {
 	var req map[string]interface{}
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	groupID := req["group_id"].(string)
+	groupID, _ := req["GroupId"].(string)
 
 	deleteQuery := `DELETE FROM syncplay_group_members WHERE group_id = ?`
 	_, err := h.db.ExecContext(r.Context(), deleteQuery, groupID)
 	if err != nil {
-		syncPlayLog.Error("Failed to leave group", "error", err)
-		http.Error(w, "Failed to leave group", http.StatusInternalServerError)
+		log.Printf("syncplay-handler: LeaveGroup: delete failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to leave group")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// SendCommand sends a sync play command to group members
+// SendCommand sends a sync play command to group members.
 func (h *SyncPlayHandler) SendCommand(w http.ResponseWriter, r *http.Request) {
 	var req map[string]interface{}
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	groupID := req["group_id"].(string)
-	command := req["command"].(string)
-	jsonData, _ := json.Marshal(req["data"])
+	groupID, _ := req["GroupId"].(string)
+	command, _ := req["Command"].(string)
+	jsonData, _ := json.Marshal(req["Data"])
 
-	// Store command for delivery to group members
 	insertQuery := `INSERT INTO syncplay_commands (group_id, command, data, created_at)
 		VALUES (?, ?, ?, ?)`
 	_, err := h.db.ExecContext(r.Context(), insertQuery, groupID, command, string(jsonData), time.Now())
 	if err != nil {
-		syncPlayLog.Error("Failed to queue syncplay command", "error", err)
-		http.Error(w, "Failed to send command", http.StatusInternalServerError)
+		log.Printf("syncplay-handler: SendCommand: insert failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to send command")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// Helper functions (generateUUID uses github.com/google/uuid in production)
-func generateUUID() string {
-	// Placeholder - will use github.com/google/uuid in final implementation
-	return "" // TODO: Implement with proper UUID generation
+func generateGroupID() string {
+	return fmt.Sprintf("%016x", rand.Int63())
 }
 
 func generateAccessCode() string {
-	// Placeholder - will use random 6-char code in final implementation
-	from ""
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 6)
+	for i := range b {
+		b[i] = chars[rand.Intn(len(chars))]
+	}
+	return string(b)
 }

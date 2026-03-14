@@ -1,57 +1,36 @@
 package main
 
 import (
+	"log"
 	"net/http"
-	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/render"
-	"github.com/go-sql-driver/mysql"
-	"github.com/jellyfinhanced/shared/db"
-	"github.com/jellyfinhanced/shared/logger"
+	"github.com/go-chi/cors"
+	"github.com/jellyfinhanced/shared/response"
 )
 
-var appLog = logger.NewLogger("plugin-service")
-
 func main() {
-	user := getenv("DB_USER", "kabletown")
-	pass := getenv("DB_PASS", "kabletown")
-	host := getenv("DB_HOST", "mysql")
-	port := getenv("DB_PORT", "3306")
-	dbName := getenv("DB_NAME", "kabletown")
+	router := chi.NewRouter()
+	router.Use(middleware.Logger)
+	router.Use(cors.Handler(cors.Options{
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowCredentials: true,
+		MaxAge: 300,
+	}))
 
-	connStr := user + ":" + pass + "@tcp(" + host + ":" + port + ")/" + dbName + "?parseTime=true&loc=Local"
-
-	dbPool, err := db.NewMySQLPool(connStr)
-	if err != nil {
-		appLog.Fatal("Failed to connect to database", "error", err)
-	}
-	defer dbPool.Close()
-
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(render.SetContentType(render.ContentTypeJSON))
-
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		render.JSON(w, r, map[string]string{"status": "plugin service ready"})
+	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		response.WriteJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
 	})
 
-	portStr := getenv("PORT", "8014")
-	appLog.Info("Starting plugin service", "port", portStr)
-	err = http.ListenAndServe(":"+portStr, r)
-	if err != nil {
-		appLog.Fatal("Server failed to start", "error", err)
-	}
-}
+	router.Route("/Plugins", func(r chi.Router) {
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			response.WriteNotImplemented(w, "Plugins endpoint not implemented")
+		})
+	})
 
-func getenv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
+	log.Println("Plugin service starting on :8015")
+	http.ListenAndServe(":8015", router)
 }

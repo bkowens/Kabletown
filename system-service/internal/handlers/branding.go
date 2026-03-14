@@ -3,12 +3,12 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 // GetBrandingOptions handles GET /Branding/Configuration.
 func (h *Handler) GetBrandingOptions(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"LoginDisclaimer": "",
 		"CustomCss":       "",
 		"SplashscreenEnabled": false,

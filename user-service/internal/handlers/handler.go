@@ -1,13 +1,10 @@
 package handlers
 
 import (
-	"net/http"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
 
-	"github.com/bowens/kabletown/user-service/internal/db"
-	"github.com/bowens/kabletown/shared/auth"
+	"github.com/jellyfinhanced/user-service/internal/db"
 )
 
 // Handler holds all dependencies for user-service route handlers.
@@ -31,37 +28,31 @@ func New(sqlxDB *sqlx.DB, serverID string) *Handler {
 }
 
 // RegisterRoutes wires all user-service routes onto the given chi router.
-func (h *Handler) RegisterRoutes(r chi.Router, lookup auth.DeviceLookupFunc) {
-	anonymousPaths := []string{"/healthz"}
-	authMiddleware := auth.NewAuthMiddleware(lookup, anonymousPaths)
+func (h *Handler) RegisterRoutes(r chi.Router) {
+	// User CRUD
+	r.Get("/Users", h.ListUsers)
+	r.Post("/Users/New", h.CreateUser)
+	r.Get("/Users/{userId}", h.GetUser)
+	r.Put("/Users/{userId}", h.UpdateUser)
+	r.Delete("/Users/{userId}", h.DeleteUser)
+	r.Post("/Users/{userId}/Password", h.ChangePassword)
+	r.Post("/Users/{userId}/Policy", h.UpdatePolicy)
+	r.Post("/Users/{userId}/Configuration", h.UpdateConfiguration)
 
-	r.Group(func(r chi.Router) {
-		r.Use(authMiddleware)
+	// User library / views
+	r.Get("/Users/{userId}/Items/Latest", h.GetLatestItems)
+	r.Get("/Users/{userId}/Views", h.GetUserViews)
 
-		// User CRUD
-		r.Get("/Users", auth.RequireAuth(http.HandlerFunc(h.ListUsers)).ServeHTTP)
-		r.Post("/Users/New", auth.RequireAdmin(http.HandlerFunc(h.CreateUser)).ServeHTTP)
-		r.Get("/Users/{userId}", auth.RequireAuth(http.HandlerFunc(h.GetUser)).ServeHTTP)
-		r.Put("/Users/{userId}", auth.RequireAuth(http.HandlerFunc(h.UpdateUser)).ServeHTTP)
-		r.Delete("/Users/{userId}", auth.RequireAdmin(http.HandlerFunc(h.DeleteUser)).ServeHTTP)
-		r.Post("/Users/{userId}/Password", auth.RequireAuth(http.HandlerFunc(h.ChangePassword)).ServeHTTP)
-		r.Post("/Users/{userId}/Policy", auth.RequireAdmin(http.HandlerFunc(h.UpdatePolicy)).ServeHTTP)
-		r.Post("/Users/{userId}/Configuration", auth.RequireAuth(http.HandlerFunc(h.UpdateConfiguration)).ServeHTTP)
+	// Display preferences
+	r.Get("/DisplayPreferences/{displayPreferencesId}", h.GetDisplayPreferences)
+	r.Post("/DisplayPreferences/{displayPreferencesId}", h.SetDisplayPreferences)
 
-		// User library / views
-		r.Get("/Users/{userId}/Items/Latest", auth.RequireAuth(http.HandlerFunc(h.GetLatestItems)).ServeHTTP)
-		r.Get("/Users/{userId}/Views", auth.RequireAuth(http.HandlerFunc(h.GetUserViews)).ServeHTTP)
+	// Favorites
+	r.Post("/Users/{userId}/FavoriteItems/{itemId}", h.MarkFavorite)
+	r.Delete("/Users/{userId}/FavoriteItems/{itemId}", h.UnmarkFavorite)
 
-		// Display preferences
-		r.Get("/DisplayPreferences/{displayPreferencesId}", auth.RequireAuth(http.HandlerFunc(h.GetDisplayPreferences)).ServeHTTP)
-		r.Post("/DisplayPreferences/{displayPreferencesId}", auth.RequireAuth(http.HandlerFunc(h.SetDisplayPreferences)).ServeHTTP)
-
-		// Favorites
-		r.Post("/Users/{userId}/FavoriteItems/{itemId}", auth.RequireAuth(http.HandlerFunc(h.MarkFavorite)).ServeHTTP)
-		r.Delete("/Users/{userId}/FavoriteItems/{itemId}", auth.RequireAuth(http.HandlerFunc(h.UnmarkFavorite)).ServeHTTP)
-
-		// Played state
-		r.Post("/Users/{userId}/PlayedItems/{itemId}", auth.RequireAuth(http.HandlerFunc(h.MarkPlayed)).ServeHTTP)
-		r.Delete("/Users/{userId}/PlayedItems/{itemId}", auth.RequireAuth(http.HandlerFunc(h.MarkUnplayed)).ServeHTTP)
-	})
+	// Played state
+	r.Post("/Users/{userId}/PlayedItems/{itemId}", h.MarkPlayed)
+	r.Post("/Users/{userId}/PlayedItems/{itemId}/Unplayed", h.MarkUnplayed)
+	r.Post("/Users/{userId}/PlayingItems", h.MarkPlaying)
 }

@@ -1,24 +1,16 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.21-alpine AS builder
 
 WORKDIR /build
 
-RUN apk add --no-cache gcc musl-dev
-
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod go.sum* ./
+RUN go mod download || true
 
 COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o notification-service ./cmd/server
 
-RUN go build -ldflags="-s -w" -o server ./cmd/server
-
-FROM alpine:3.19
-
-RUN apk add --no-cache ca-certificates tzdata
-
+FROM alpine:latest
 WORKDIR /app
+COPY --from=builder /build/notification-service .
 
-COPY --from=builder /build/server /app/server
-
-EXPOSE 8000
-
-CMD ["/app/server"]
+EXPOSE 8013
+CMD ["./notification-service"]

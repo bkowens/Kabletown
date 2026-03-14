@@ -15,11 +15,10 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
-	"github.com/bowens/kabletown/auth-service/internal/db"
-	"github.com/bowens/kabletown/auth-service/internal/handlers"
-	"github.com/bowens/kabletown/shared/auth"
-	sharedDB "github.com/bowens/kabletown/shared/db"
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/auth-service/internal/db"
+	"github.com/jellyfinhanced/auth-service/internal/handlers"
+	sharedDB "github.com/jellyfinhanced/shared/db"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 func main() {
@@ -51,16 +50,12 @@ func main() {
 
 	h := handlers.New(sqlxDB, serverID)
 	resolver := db.NewTokenResolver(sqlxDB)
-
-	lookup := auth.DeviceLookupFunc(func(token string) (string, bool, error) {
-		return resolver.ResolveToken(token)
-	})
+	h.SetTokenResolver(resolver)
 
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RealIP)
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
-	r.Use(response.RequiredHeaders)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
@@ -76,7 +71,7 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
 	})
 
-	h.RegisterRoutes(r, lookup)
+	h.RegisterRoutes(r)
 
 	addr := ":" + servicePort
 	srv := &http.Server{

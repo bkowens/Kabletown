@@ -3,12 +3,12 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 // GetLocalizationOptions handles GET /Localization/Options.
 func (h *Handler) GetLocalizationOptions(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, []map[string]string{
+	response.WriteJSON(w, http.StatusOK, []map[string]string{
 		{"Name": "Arabic", "Value": "ar"},
 		{"Name": "Chinese Simplified", "Value": "zh-CN"},
 		{"Name": "Chinese Traditional", "Value": "zh-TW"},
@@ -41,7 +41,7 @@ func (h *Handler) GetLocalizationOptions(w http.ResponseWriter, r *http.Request)
 
 // GetCountries handles GET /Localization/Countries.
 func (h *Handler) GetCountries(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, []map[string]string{
+	response.WriteJSON(w, http.StatusOK, []map[string]string{
 		{"Name": "United States", "DisplayName": "United States", "TwoLetterISORegionName": "US", "ThreeLetterISORegionName": "USA"},
 		{"Name": "United Kingdom", "DisplayName": "United Kingdom", "TwoLetterISORegionName": "GB", "ThreeLetterISORegionName": "GBR"},
 		{"Name": "Canada", "DisplayName": "Canada", "TwoLetterISORegionName": "CA", "ThreeLetterISORegionName": "CAN"},
@@ -54,7 +54,7 @@ func (h *Handler) GetCountries(w http.ResponseWriter, r *http.Request) {
 
 // GetCultures handles GET /Localization/Cultures.
 func (h *Handler) GetCultures(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, []map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, []map[string]interface{}{
 		{"Name": "English", "DisplayName": "English", "TwoLetterISOLanguageName": "en", "ThreeLetterISOLanguageName": "eng", "ThreeLetterISOLanguageNameList": []string{"eng"}},
 		{"Name": "French", "DisplayName": "French", "TwoLetterISOLanguageName": "fr", "ThreeLetterISOLanguageName": "fre", "ThreeLetterISOLanguageNameList": []string{"fre", "fra"}},
 		{"Name": "German", "DisplayName": "German", "TwoLetterISOLanguageName": "de", "ThreeLetterISOLanguageName": "ger", "ThreeLetterISOLanguageNameList": []string{"ger", "deu"}},
@@ -66,7 +66,7 @@ func (h *Handler) GetCultures(w http.ResponseWriter, r *http.Request) {
 
 // GetParentalRatings handles GET /Localization/ParentalRatings.
 func (h *Handler) GetParentalRatings(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, []map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, []map[string]interface{}{
 		{"Name": "NR", "Value": -1},
 		{"Name": "G", "Value": 1},
 		{"Name": "PG", "Value": 5},

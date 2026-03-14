@@ -2,35 +2,42 @@ package handlers
 
 import (
 	"database/sql"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jellyfinhanced/shared/logger"
+
+	"github.com/jellyfinhanced/shared/response"
 )
 
-var moviesLog = logger.NewLogger("movies-handler")
-
+// MoviesHandler handles movie-related requests.
 type MoviesHandler struct {
-	db  *sql.DB
+	db *sql.DB
 }
 
+// NewMoviesHandler creates a new MoviesHandler.
 func NewMoviesHandler(dbPool *sql.DB) *MoviesHandler {
 	return &MoviesHandler{db: dbPool}
 }
 
+// GetMovies returns a list of movies.
 func (h *MoviesHandler) GetMovies(w http.ResponseWriter, r *http.Request) {
-	moviesLog.Info("Get movies requested")
-	w.WriteHeader(http.StatusOK)
-	render.JSON(w, r, map[string]interface{}{"Items": []interface{}{}})
+	log.Printf("movies-handler: GetMovies requested")
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"Items":            []interface{}{},
+		"TotalRecordCount": 0,
+		"StartIndex":       0,
+	})
 }
 
+// GetMovie returns a specific movie.
 func (h *MoviesHandler) GetMovie(w http.ResponseWriter, r *http.Request) {
 	_ = chi.URLParam(r, "itemId")
-	w.WriteHeader(http.StatusOK)
-	render.JSON(w, r, map[string]interface{}{})
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
+// PlayMovie initiates playback for a movie.
 func (h *MoviesHandler) PlayMovie(w http.ResponseWriter, r *http.Request) {
 	_ = chi.URLParam(r, "itemId")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }

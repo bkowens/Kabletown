@@ -1,38 +1,21 @@
 package auth
 
-import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"time"
-)
+import "github.com/jellyfinhanced/shared/types"
 
-// GenerateToken creates a 256-bit (64 hex char) token for API authentication
+// TokenLength is the number of bytes in a token (256-bit = 32 bytes = 64 hex chars)
+const TokenLength = types.TokenLength
+
+// GenerateToken creates a new 256-bit hex token  
 func GenerateToken() string {
-	token := make([]byte, 32) // 32 bytes = 256 bits
-	rand.Read(token)
-	return hex.EncodeToString(token)
+	return types.GenerateToken()
 }
 
-// HashToken creates SHA256 hash of token for secure database storage
+// HashToken creates SHA256 hash of a token for DB storage
 func HashToken(token string) string {
-	hash := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(hash[:])
+	return types.HashToken(token)
 }
 
-// TokenExpiry checks if a token has expired
-func TokenExpiry(expiresAt *time.Time) bool {
-	if expiresAt == nil {
-		return false // Indefinite lifetime
-	}
-	return time.Now().After(*expiresAt)
-}
-
-// ValidateTokenFormat checks if token is valid 64-char hex
+// ValidateTokenFormat checks if a token has valid format
 func ValidateTokenFormat(token string) bool {
-	if len(token) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(token)
-	return err == nil
+	return types.ValidateTokenFormat(token)
 }

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 // ForgotPassword handles POST /Users/ForgotPassword.
@@ -15,7 +15,7 @@ func (h *Handler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	var body interface{}
 	json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck
 
-	response.JSON(w, http.StatusOK, map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"Action":            "ContactAdmin",
 		"PinFile":           nil,
 		"PinExpirationDate": nil,
@@ -30,7 +30,7 @@ func (h *Handler) ForgotPasswordPin(w http.ResponseWriter, r *http.Request) {
 	var body interface{}
 	json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck
 
-	response.JSON(w, http.StatusOK, map[string]bool{
+	response.WriteJSON(w, http.StatusOK, map[string]bool{
 		"Success":   false,
 		"IsInError": true,
 	})

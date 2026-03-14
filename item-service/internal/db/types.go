@@ -1,7 +1,7 @@
 package db
 
 import (
-	"github.com/bowens/kabletown/shared/types"
+	"github.com/jellyfinhanced/shared/types"
 )
 
 // BaseItemDto represents a media item matching Jellyfin's model

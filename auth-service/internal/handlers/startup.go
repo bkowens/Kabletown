@@ -4,14 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/bowens/kabletown/auth-service/internal/db"
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/auth-service/internal/db"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 // StartupConfiguration handles GET /Startup/Configuration.
 // Returns the default startup configuration values expected by Jellyfin clients.
 func (h *Handler) StartupConfiguration(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, map[string]string{
+	response.WriteJSON(w, http.StatusOK, map[string]string{
 		"UICulture":                    "en-US",
 		"MetadataCountryCode":          "US",
 		"PreferredMetadataLanguage":    "en",
@@ -26,7 +26,7 @@ func (h *Handler) StartupComplete(w http.ResponseWriter, r *http.Request) {
 
 // GetRemoteAccess handles GET /Startup/RemoteAccess.
 func (h *Handler) GetRemoteAccess(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, map[string]bool{
+	response.WriteJSON(w, http.StatusOK, map[string]bool{
 		"EnableRemoteAccess": true,
 		"EnableUPnP":         false,
 	})
@@ -53,14 +53,14 @@ func (h *Handler) GetStartupUser(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		// No admin user exists yet — return empty object so the wizard can proceed.
-		response.JSON(w, http.StatusOK, map[string]string{
+		response.WriteJSON(w, http.StatusOK, map[string]string{
 			"Name":     "",
 			"Password": "",
 		})
 		return
 	}
 
-	response.JSON(w, http.StatusOK, map[string]string{
+	response.WriteJSON(w, http.StatusOK, map[string]string{
 		"Name":     name,
 		"Password": "",
 	})
@@ -75,17 +75,17 @@ func (h *Handler) SetStartupUser(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"Password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Name == "" {
-		response.Error(w, http.StatusBadRequest, "Name is required")
+		response.WriteError(w, http.StatusBadRequest, "Name is required")
 		return
 	}
 
 	hash, err := db.HashPassword(req.Password)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to hash password")
+		response.WriteError(w, http.StatusInternalServerError, "failed to hash password")
 		return
 	}
 
@@ -99,7 +99,7 @@ func (h *Handler) SetStartupUser(w http.ResponseWriter, r *http.Request) {
 			`UPDATE Users SET Password = ? WHERE Id = ?`,
 			hash, existingID,
 		); err != nil {
-			response.Error(w, http.StatusInternalServerError, "failed to update user")
+			response.WriteError(w, http.StatusInternalServerError, "failed to update user")
 			return
 		}
 		// Ensure the admin permission row exists.
@@ -116,13 +116,13 @@ func (h *Handler) SetStartupUser(w http.ResponseWriter, r *http.Request) {
 	// Create a new admin user.
 	newID, genErr := generateToken()
 	if genErr != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to generate user id")
+		response.WriteError(w, http.StatusInternalServerError, "failed to generate user id")
 		return
 	}
 
 	tx, err := h.db.Begin()
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to start transaction")
+		response.WriteError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
 
@@ -132,7 +132,7 @@ func (h *Handler) SetStartupUser(w http.ResponseWriter, r *http.Request) {
 		newID, req.Name, hash,
 	); err != nil {
 		tx.Rollback() //nolint:errcheck
-		response.Error(w, http.StatusInternalServerError, "failed to create user")
+		response.WriteError(w, http.StatusInternalServerError, "failed to create user")
 		return
 	}
 
@@ -141,12 +141,12 @@ func (h *Handler) SetStartupUser(w http.ResponseWriter, r *http.Request) {
 		newID,
 	); err != nil {
 		tx.Rollback() //nolint:errcheck
-		response.Error(w, http.StatusInternalServerError, "failed to set admin permission")
+		response.WriteError(w, http.StatusInternalServerError, "failed to set admin permission")
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to commit transaction")
+		response.WriteError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
 

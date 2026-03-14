@@ -15,8 +15,8 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
-	"github.com/bowens/kabletown/shared/response"
-	"github.com/bowens/kabletown/system-service/internal/handlers"
+	"github.com/jellyfinhanced/shared/response"
+	"github.com/jellyfinhanced/system-service/internal/handlers"
 )
 
 func main() {
@@ -32,7 +32,7 @@ func main() {
 	r.Use(chiMiddleware.RealIP)
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
-	r.Use(response.RequiredHeaders)
+	// // r.Use(response.RequiredHeaders) // disabled // disabled
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},

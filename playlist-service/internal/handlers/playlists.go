@@ -1,198 +1,304 @@
 package handlers
 
 import (
-	"log"
+	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
-	"github.com/bowens/kabletown/playlist-service/internal/db"
-	"github.com/bowens/kabletown/shared/response"
 	"github.com/go-chi/chi/v5"
+
+	"github.com/jellyfinhanced/playlist-service/internal/db"
+	"github.com/jellyfinhanced/shared/response"
 )
 
-// getPlaylistRepo extracts repository from context
-func getPlaylistRepo(r *http.Request) *db.PlaylistRepository {
-	repo, ok := r.Context().Value("playlistRepo").(*db.PlaylistRepository)
-	if !ok {
-		log.Println("⚠️ playlistRepo not found in context")
-		return nil
-	}
+type contextKeyType string
+
+const repoContextKey contextKeyType = "playlistRepo"
+
+// RegisterRoutes wires all playlist routes onto the provided router.
+func RegisterRoutes(r chi.Router, repo *db.PlaylistRepository) {
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := context.WithValue(req.Context(), repoContextKey, repo)
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	})
+
+	r.Post("/Playlists", CreatePlaylist)
+	r.Get("/Playlists/{playlistId}", GetPlaylist)
+	r.Delete("/Playlists/{playlistId}", DeletePlaylist)
+	r.Get("/Playlists/{playlistId}/Items", GetPlaylistItems)
+	r.Post("/Playlists/{playlistId}/Items", func(w http.ResponseWriter, r *http.Request) { response.WriteNotImplemented(w, "Add to playlist not implemented") })
+	r.Delete("/Playlists/{playlistId}/Items", RemoveFromPlaylist)
+	r.Post("/Playlists/{playlistId}/Items/Move/{itemId}", MovePlaylistItem)
+}
+
+// getRepo extracts the PlaylistRepository from the request context.
+func getRepo(r *http.Request) *db.PlaylistRepository {
+	repo, _ := r.Context().Value(repoContextKey).(*db.PlaylistRepository)
 	return repo
 }
 
-// GetPlaylists returns playlists for the current user (protected)
-// GET /api/Playlists
-func GetPlaylists(w http.ResponseWriter, r *http.Request) {
-	repo := getPlaylistRepo(r)
-	if repo == nil {
-		response.InternalServerError(w, "Internal server error")
-		return
-	}
-
-	// TODO: Get user ID from token/context
-	userID := "00000000-0000-0000-0000-000000000000" // Placeholder
-
-	playlists, err := repo.GetUserPlaylists(userID)
-	if err != nil {
-		response.InternalServerError(w, "Failed to fetch playlists")
-		return
-	}
-
-	// W5: Use PaginatedResponse envelope (never bare array)
-	// W6: ensure [] not null
-	response.PaginatedResponse(w, playlists, len(playlists), 0, len(playlists))
+// CreatePlaylistRequest is the POST /Playlists request body.
+type CreatePlaylistRequest struct {
+	Name    string   `json:"Name"`
+	UserId  string   `json:"UserId"`
+	ItemIds []string `json:"ItemIds,omitempty"`
 }
 
-// GetPlaylist returns a playlist by ID (public)
-// GET /api/Playlists/{id}
-func GetPlaylist(w http.ResponseWriter, r *http.Request) {
-	playlistIDStr := chi.URLParam(r, "playlistId")
-	playlistID, err := strconv.Atoi(playlistIDStr)
-	if err != nil {
-		response.BadRequest(w, "Invalid playlist ID")
+// CreatePlaylist handles POST /Playlists.
+func CreatePlaylist(w http.ResponseWriter, r *http.Request) {
+	var req CreatePlaylistRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	repo := getPlaylistRepo(r)
+	if req.Name == "" {
+		response.WriteError(w, http.StatusBadRequest, "Name is required")
+		return
+	}
+
+	userID := req.UserId
+	if userID == "" {
+		userID = r.URL.Query().Get("userId")
+	}
+	if userID == "" {
+		response.WriteError(w, http.StatusBadRequest, "UserId is required")
+		return
+	}
+
+	repo := getRepo(r)
 	if repo == nil {
-		response.InternalServerError(w, "Internal server error")
+		response.WriteError(w, http.StatusInternalServerError, "repository not initialized")
+		return
+	}
+
+	playlist := &db.Playlist{
+		Name:   req.Name,
+		UserID: userID,
+	}
+
+	if err := repo.CreatePlaylist(playlist); err != nil {
+		response.WriteError(w, http.StatusInternalServerError, "failed to create playlist")
+		return
+	}
+
+	for _, itemID := range req.ItemIds {
+		if _, err := repo.AddItemToPlaylist(playlist.ID, strings.TrimSpace(itemID)); err != nil {
+			_ = repo.DeletePlaylist(playlist.ID)
+			response.WriteError(w, http.StatusInternalServerError, "failed to add item to playlist")
+			return
+		}
+	}
+
+	response.WriteJSON(w, http.StatusCreated, playlist)
+}
+
+// GetPlaylist handles GET /Playlists/{playlistId}.
+func GetPlaylist(w http.ResponseWriter, r *http.Request) {
+	playlistID, err := parsePlaylistID(r)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid playlist ID")
+		return
+	}
+
+	repo := getRepo(r)
+	if repo == nil {
+		response.WriteError(w, http.StatusInternalServerError, "repository not initialized")
 		return
 	}
 
 	playlist, err := repo.GetPlaylistByID(playlistID)
+	if err == db.ErrPlaylistNotFound {
+		response.WriteError(w, http.StatusNotFound, "playlist not found")
+		return
+	}
 	if err != nil {
-		response.NotFound(w, "Playlist not found")
+		response.WriteError(w, http.StatusInternalServerError, "failed to fetch playlist")
 		return
 	}
 
-	response.OK(w, playlist)
+	response.WriteJSON(w, http.StatusOK, playlist)
 }
 
-// ListPlaylist returns a simple list endpoint (public)
-// GET /api/Playlists (for discovery)
-func ListPlaylist(w http.ResponseWriter, r *http.Request) {
-	// W5: Use paginated envelope
-	response.PaginatedResponse(w, []db.Playlist{}, 0, 0, 0)
-}
-
-// CreatePlaylist creates a new playlist (protected)
-// POST /api/Playlists
-func CreatePlaylist(w http.ResponseWriter, r *http.Request) {
-	// TODO: Parse request body into Playlist
-	// W1: Request body uses PascalCase: { "Name": "My Playlist", "UserId": "..." }
-	// W2: UserId must be lowercase hyphenated GUID
-	// W3: DateCreated will be automatically set with 7 decimal places
-
-	repo := getPlaylistRepo(r)
-	if repo == nil {
-		response.InternalServerError(w, "Internal server error")
-		return
-	}
-
-	// Placeholder - TODO: parse body
-	playlist := &db.Playlist{
-		Name:   "New Playlist",
-		UserID: "00000000-0000-0000-0000-000000000000",
-	}
-
-	if err := repo.CreatePlaylist(playlist); err != nil {
-		response.InternalServerError(w, "Failed to create playlist")
-		return
-	}
-
-	response.Created(w, playlist)
-}
-
-// UpdatePlaylist updates an existing playlist (protected)
-// PATCH /api/Playlists/{id}
-func UpdatePlaylist(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement update logic
-	response.OK(w, map[string]string{"Status": "Update not yet implemented"})
-}
-
-// DeletePlaylist deletes a playlist (protected)
-// DELETE /api/Playlists/{id}
+// DeletePlaylist handles DELETE /Playlists/{playlistId}.
 func DeletePlaylist(w http.ResponseWriter, r *http.Request) {
-	playlistIDStr := chi.URLParam(r, "playlistId")
-	playlistID, err := strconv.Atoi(playlistIDStr)
+	playlistID, err := parsePlaylistID(r)
 	if err != nil {
-		response.BadRequest(w, "Invalid playlist ID")
+		response.WriteError(w, http.StatusBadRequest, "invalid playlist ID")
 		return
 	}
 
-	repo := getPlaylistRepo(r)
+	repo := getRepo(r)
 	if repo == nil {
-		response.InternalServerError(w, "Internal server error")
+		response.WriteError(w, http.StatusInternalServerError, "repository not initialized")
 		return
 	}
 
 	if err := repo.DeletePlaylist(playlistID); err != nil {
-		response.NotFound(w, "Playlist not found")
+		if err == db.ErrPlaylistNotFound {
+			response.WriteError(w, http.StatusNotFound, "playlist not found")
+			return
+		}
+		response.WriteError(w, http.StatusInternalServerError, "failed to delete playlist")
 		return
 	}
 
-	response.NoContent(w)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// AddToPlaylist adds an item to a playlist (protected)
-// POST /api/Playlists/{id}/AddToPlaylist
-func AddToPlaylist(w http.ResponseWriter, r *http.Request) {
-	playlistIDStr := chi.URLParam(r, "playlistId")
-	playlistID, err := strconv.Atoi(playlistIDStr)
-	if err != nil {
-		response.BadRequest(w, "Invalid playlist ID")
-		return
-	}
-
-	repo := getPlaylistRepo(r)
-	if repo == nil {
-		response.InternalServerError(w, "Internal server error")
-		return
-	}
-
-	// TODO: Parse libraryItemID from body
-	// W2: libraryItemID must be lowercase hyphenated GUID
-	libraryItemID := "00000000-0000-0000-0000-000000000000" // Placeholder
-
-	item, err := repo.AddItemToPlaylist(playlistID, libraryItemID)
-	if err != nil {
-		response.InternalServerError(w, "Failed to add item to playlist")
-		return
-	}
-
-	response.Created(w, item)
-}
-
-// GetPlaylistItems returns all items in a playlist (public)
-// GET /api/Playlists/{playlistId}/Items
+// GetPlaylistItems handles GET /Playlists/{playlistId}/Items.
 func GetPlaylistItems(w http.ResponseWriter, r *http.Request) {
-	playlistIDStr := chi.URLParam(r, "playlistId")
-	playlistID, err := strconv.Atoi(playlistIDStr)
+	playlistID, err := parsePlaylistID(r)
 	if err != nil {
-		response.BadRequest(w, "Invalid playlist ID")
+		response.WriteError(w, http.StatusBadRequest, "invalid playlist ID")
 		return
 	}
 
-	repo := getPlaylistRepo(r)
+	repo := getRepo(r)
 	if repo == nil {
-		response.InternalServerError(w, "Internal server error")
+		response.WriteError(w, http.StatusInternalServerError, "repository not initialized")
 		return
 	}
 
 	items, err := repo.GetPlaylistItems(playlistID)
 	if err != nil {
-		response.NotFound(w, "Playlist not found")
+		response.WriteError(w, http.StatusInternalServerError, "failed to fetch playlist items")
 		return
 	}
 
-	// W5: Use PaginatedResponse envelope (never bare array)
-	// W6: ensure [] not null
-	response.PaginatedResponse(w, items, len(items), 0, len(items))
+	// WritePaginated(w, "playlists", items, totalCount)
+	// if !result {
+	//	return
+	// }
+	response.WriteJSON(w, http.StatusOK, items)
+	return
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid playlist ID")
+		return
+	}
+
+	var req struct {
+		ItemIds []string `json:"ItemIds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	repo = getRepo(r)
+	if repo == nil {
+		response.WriteError(w, http.StatusInternalServerError, "repository not initialized")
+		return
+	}
+
+	var added []*db.PlaylistItem
+	for _, itemID := range req.ItemIds {
+		item, err := repo.AddItemToPlaylist(playlistID, strings.TrimSpace(itemID))
+		if err != nil {
+			response.WriteError(w, http.StatusInternalServerError, "failed to add item to playlist")
+			return
+		}
+		added = append(added, item)
+	}
+
+	response.WriteJSON(w, http.StatusOK, map[string]string{"Message": "items added to playlist"})
 }
 
-// RemoveFromPlaylist removes an item from a playlist (protected)
-// DELETE /api/Playlists/{playlistId}/RemoveFromPlaylist
+// RemoveFromPlaylist handles DELETE /Playlists/{playlistId}/Items.
+// Accepts a JSON body with ItemIds (library item IDs) or EntryIds (playlist item row IDs).
 func RemoveFromPlaylist(w http.ResponseWriter, r *http.Request) {
-	// TODO: Parse item ID from body or query params
-	response.OK(w, map[string]string{"Status": "Remove not yet implemented"})
+	playlistID, err := parsePlaylistID(r)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid playlist ID")
+		return
+	}
+
+	var req struct {
+		ItemIds  []string `json:"ItemIds,omitempty"`
+		EntryIds []string `json:"EntryIds,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	repo := getRepo(r)
+	if repo == nil {
+		response.WriteError(w, http.StatusInternalServerError, "repository not initialized")
+		return
+	}
+
+	for _, libraryItemID := range req.ItemIds {
+		if err := repo.RemoveItemFromPlaylistByLibraryID(playlistID, strings.TrimSpace(libraryItemID)); err != nil {
+			if err == db.ErrPlaylistItemNotFound {
+				response.WriteError(w, http.StatusNotFound, "playlist item not found")
+				return
+			}
+			response.WriteError(w, http.StatusInternalServerError, "failed to remove item")
+			return
+		}
+	}
+
+	for _, entryIDStr := range req.EntryIds {
+		entryID, err := strconv.Atoi(strings.TrimSpace(entryIDStr))
+		if err != nil {
+			response.WriteError(w, http.StatusBadRequest, "invalid entry ID")
+			return
+		}
+		if err := repo.RemoveItemFromPlaylist(playlistID, entryID); err != nil {
+			if err == db.ErrPlaylistItemNotFound {
+				response.WriteError(w, http.StatusNotFound, "playlist item not found")
+				return
+			}
+			response.WriteError(w, http.StatusInternalServerError, "failed to remove item")
+			return
+		}
+	}
+
+	response.WriteJSON(w, http.StatusOK, map[string]string{"Message": "items removed from playlist"})
+}
+
+// MovePlaylistItem handles POST /Playlists/{playlistId}/Items/Move/{itemId}.
+func MovePlaylistItem(w http.ResponseWriter, r *http.Request) {
+	playlistID, err := parsePlaylistID(r)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid playlist ID")
+		return
+	}
+
+	itemIDStr := chi.URLParam(r, "itemId")
+	itemID, err := strconv.Atoi(itemIDStr)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid item ID")
+		return
+	}
+
+	newIndexStr := r.URL.Query().Get("newIndex")
+	newIndex, err := strconv.Atoi(newIndexStr)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid newIndex")
+		return
+	}
+
+	repo := getRepo(r)
+	if repo == nil {
+		response.WriteError(w, http.StatusInternalServerError, "repository not initialized")
+		return
+	}
+
+	if err := repo.MoveItem(playlistID, itemID, newIndex); err != nil {
+		response.WriteError(w, http.StatusInternalServerError, "failed to move item")
+		return
+	}
+
+	response.WriteJSON(w, http.StatusOK, map[string]string{"Message": "item moved"})
+}
+
+// parsePlaylistID extracts and validates the playlistId URL parameter.
+func parsePlaylistID(r *http.Request) (int, error) {
+	return strconv.Atoi(chi.URLParam(r, "playlistId"))
 }

@@ -1,147 +1,116 @@
 package main
 
 import (
-    "context"
-    "log"
-    "net/http"
-    "os"
-    "os/signal"
-    "syscall"
-    "time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-    "github.com/bowens/kabletown/collection-service/internal/db"
-    "github.com/bowens/kabletown/collection-service/internal/handlers"
-    "github.com/bowens/kabletown/collection-service/internal/middleware"
-    shared_db "github.com/bowens/kabletown/shared/db"
-    "github.com/go-chi/chi/v5"
-    chi_middleware "github.com/go-chi/chi/v5/middleware"
-    "github.com/joho/godotenv"
+	"github.com/go-chi/chi/v5"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+
+	"github.com/jellyfinhanced/collection-service/internal/db"
+	"github.com/jellyfinhanced/collection-service/internal/handlers"
+	sharedDB "github.com/jellyfinhanced/shared/db"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 func main() {
-    _ = godotenv.Load()
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "3306")
+	dbUser := getEnv("DB_USER", "jellyfin")
+	dbPassword := getEnv("DB_PASSWORD", "")
+	dbName := getEnv("DB_NAME", "jellyfin")
+	servicePort := getEnv("SERVICE_PORT", "8012")
+	serverID := getEnv("SERVER_ID", "00000000-0000-0000-0000-000000000000")
 
-    // Database configuration from environment
-    cfg := &shared_db.Config{
-        Host:         getEnv("DB_HOST", "localhost"),
-        Port:         3306,
-        User:         getEnv("DB_USER", "jellyfin"),
-        Password:     getEnv("DB_PASSWORD", ""),
-        DBName:       getEnv("DB_NAME", "jellyfin"),
-        MaxOpenConns: 20,
-        MaxIdleConns: 5,
-    }
+	response.SetServerID(serverID)
 
-    // Server configuration
-    serverPort := getEnv("SERVER_PORT", "8002")
-    dataDir := getEnv("DATA_DIR", "/var/lib/jellyfin")
+	sqlxDB, err := sharedDB.Connect(sharedDB.Config{
+		Host:     dbHost,
+		Port:     dbPort,
+		User:     dbUser,
+		Password: dbPassword,
+		Name:     dbName,
+	})
+	if err != nil {
+		log.Fatalf("collection-service: failed to connect to database: %v", err)
+	}
+	defer sqlxDB.Close()
 
-    // Initialize server ID
-    log.Printf("Server ID: %s", middleware.InitializeServerID(dataDir))
+	if err := db.RunMigrations(sqlxDB); err != nil {
+		log.Fatalf("collection-service: migrations failed: %v", err)
+	}
 
-    // Create database connection pool
-    dbConn, err := shared_db.NewPool(cfg)
-    if err != nil {
-        log.Fatalf("Failed to initialize database: %v", err)
-    }
-    defer dbConn.Close()
+	repo := db.NewCollectionRepository(sqlxDB)
 
-    collectionRepo := db.NewCollectionRepository(dbConn)
+	r := chi.NewRouter()
+	r.Use(chiMiddleware.RealIP)
+	r.Use(chiMiddleware.Logger)
+	r.Use(chiMiddleware.Recoverer)
+	// // r.Use(response.RequiredHeaders) // disabled // disabled
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		AllowedHeaders:   []string{"*"},
+		ExposedHeaders:   []string{"*"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
 
-    // Create Collections table if not exists
-    createSQL := db.GetCreateCollectionsSQL()
-    if _, err := dbConn.Exec(createSQL); err != nil {
-        log.Fatalf("Failed to create Collections table: %v", err)
-    }
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
+	})
 
-    createItemsSQL := db.GetCreateCollectionItemsSQL()
-    if _, err := dbConn.Exec(createItemsSQL); err != nil {
-        log.Fatalf("Failed to create CollectionItems table: %v", err)
-    }
+	handlers.RegisterRoutes(r, repo)
 
-    // Create ItemValues tables for P6 filtering (Genre, Studio, Artist, etc.)
-    if err := shared_db.RunItemValuesMigrations(dbConn); err != nil {
-        log.Fatalf("Failed to create ItemValues tables: %v", err)
-    }
+	addr := ":" + servicePort
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 
-    r := chi.NewRouter()
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("collection-service: listening on %s (server-id=%s)", addr, serverID)
+		serverErr <- srv.ListenAndServe()
+	}()
 
-    r.Use(chi_middleware.RequestID)
-    r.Use(chi_middleware.RealIP)
-    r.Use(chi_middleware.Logger)
-    r.Use(chi_middleware.Recoverer)
-    r.Use(middleware.ResponseHeadersMiddleware())
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-    // Health check
-    r.Get("/health", healthCheck)
+	select {
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("collection-service: server error: %v", err)
+		}
+	case sig := <-quit:
+		log.Printf("collection-service: received signal %v — shutting down", sig)
+	}
 
-    // Public routes
-    r.Get("/Collections", handlers.GetCollections)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-    // Protected routes
-    r.Route("/Collections", func(r chi.Router) {
-        r.Post("/", handlers.CreateCollection)
-        r.Get("/{collectionId}", handlers.GetCollection)
-        r.Patch("/{collectionId}", handlers.UpdateCollection)
-        r.Delete("/{collectionId}", handlers.DeleteCollection)
-
-        r.Post("/{collectionId}/AddToCollection", handlers.AddToCollection)
-        r.Delete("/{collectionId}/RemoveFromCollection", handlers.RemoveFromCollection)
-    })
-
-    // Inject repository into context for protected routes
-    r.Use(func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            ctx := context.WithValue(r.Context(), "collectionRepo", collectionRepo)
-            next.ServeHTTP(w, r.WithContext(ctx))
-        })
-    })
-
-    srv := &http.Server{
-        Addr:         ":" + serverPort,
-        Handler:      r,
-        ReadTimeout:  30 * time.Second,
-        WriteTimeout: 30 * time.Second,
-    }
-
-    errChan := make(chan error, 1)
-
-    go func() {
-        log.Printf("Starting collection-service on :%s", serverPort)
-        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            errChan <- err
-        }
-    }()
-
-    done := make(chan os.Signal, 1)
-    signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-
-    select {
-    case err := <-errChan:
-        log.Printf("Server error: %v", err)
-    case <-done:
-        log.Println("Server shutting down...")
-    }
-
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-
-    if err := srv.Shutdown(ctx); err != nil {
-        log.Printf("Server shutdown error: %v", err)
-    }
-
-    log.Println("Server stopped")
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("collection-service: graceful shutdown failed: %v", err)
+	}
+	fmt.Println("collection-service: shutdown complete")
 }
 
-func healthCheck(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json; charset=utf-8")
-    w.WriteHeader(http.StatusOK)
-    w.Write([]byte("{\"status\":\"ok\"}"))
-}
-
-func getEnv(key, defaultValue string) string {
-    if value, exists := os.LookupEnv(key); exists {
-        return value
-    }
-    return defaultValue
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

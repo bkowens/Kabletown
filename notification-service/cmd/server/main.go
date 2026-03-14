@@ -1,57 +1,94 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/render"
-	"github.com/go-sql-driver/mysql"
-	"github.com/jellyfinhanced/shared/db"
-	"github.com/jellyfinhanced/shared/logger"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+
+	"github.com/jellyfinhanced/shared/response"
+	"github.com/jellyfinhanced/notification-service/internal/handlers"
 )
 
-var appLog = logger.NewLogger("notification-service")
-
 func main() {
-	user := getenv("DB_USER", "kabletown")
-	pass := getenv("DB_PASS", "kabletown")
-	host := getenv("DB_HOST", "mysql")
-	port := getenv("DB_PORT", "3306")
-	dbName := getenv("DB_NAME", "kabletown")
+	serverID := getEnv("SERVER_ID", "00000000-0000-0000-0000-000000000000")
+	serverName := getEnv("SERVER_NAME", "Kabletown")
+	servicePort := getEnv("SERVICE_PORT", "8014")
 
-	connStr := user + ":" + pass + "@tcp(" + host + ":" + port + ")/" + dbName + "?parseTime=true&loc=Local"
+	response.SetServerID(serverID)
 
-	dbPool, err := db.NewMySQLPool(connStr)
-	if err != nil {
-		appLog.Fatal("Failed to connect to database", "error", err)
-	}
-	defer dbPool.Close()
+	h := handlers.New(serverID, serverName)
 
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(render.SetContentType(render.ContentTypeJSON))
+	r.Use(chiMiddleware.RealIP)
+	r.Use(chiMiddleware.Logger)
+	r.Use(chiMiddleware.Recoverer)
+	// // r.Use(response.RequiredHeaders) // disabled // disabled
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		ExposedHeaders:   []string{"*"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
 
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		render.JSON(w, r, map[string]string{"status": "notification service ready"})
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
 	})
 
-	portStr := getenv("PORT", "8013")
-	appLog.Info("Starting notification service", "port", portStr)
-	err = http.ListenAndServe(":"+portStr, r)
-	if err != nil {
-		appLog.Fatal("Server failed to start", "error", err)
+	h.RegisterRoutes(r)
+
+	addr := ":" + servicePort
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("notification-service: listening on %s (server-id=%s)", addr, serverID)
+		serverErr <- srv.ListenAndServe()
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("notification-service: server error: %v", err)
+		}
+	case sig := <-quit:
+		log.Printf("notification-service: received signal %v — shutting down", sig)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("notification-service: graceful shutdown failed: %v", err)
+	}
+	fmt.Println("notification-service: shutdown complete")
 }
 
-func getenv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return defaultVal
+	return fallback
 }

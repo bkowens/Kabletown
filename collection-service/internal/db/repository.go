@@ -1,21 +1,25 @@
 package db
 
 import (
-	"github.com/bowens/kabletown/shared/types"
+	"database/sql"
+	"errors"
+	"time"
+
+	"github.com/jellyfinhanced/shared/types"
 	"github.com/jmoiron/sqlx"
 )
 
-// CollectionRepository handles database operations for collections
+// CollectionRepository handles database operations for collections.
 type CollectionRepository struct {
 	db *sqlx.DB
 }
 
-// NewCollectionRepository creates a new collection repository
+// NewCollectionRepository creates a new collection repository.
 func NewCollectionRepository(db *sqlx.DB) *CollectionRepository {
 	return &CollectionRepository{db: db}
 }
 
-// CreateCollection creates a new collection
+// CreateCollection creates a new collection.
 func (r *CollectionRepository) CreateCollection(name, userID string, imageTag string) (*Collection, error) {
 	query := `
 		INSERT INTO Collections (name, user_id, image_tag, row_version, date_created)
@@ -38,11 +42,11 @@ func (r *CollectionRepository) CreateCollection(name, userID string, imageTag st
 		UserID:      userID,
 		ImageTag:    imageTag,
 		RowVersion:  0,
-		DateCreated: types.Now(),
+		DateCreated: types.NewJellyfinTime(time.Now()),
 	}, nil
 }
 
-// GetCollectionByID fetches a collection by ID
+// GetCollectionByID fetches a collection by ID.
 func (r *CollectionRepository) GetCollectionByID(id int) (*Collection, error) {
 	query := `
 		SELECT id, name, user_id, image_tag, row_version, date_created
@@ -55,15 +59,17 @@ func (r *CollectionRepository) GetCollectionByID(id int) (*Collection, error) {
 		&coll.ID, &coll.Name, &coll.UserID, &coll.ImageTag,
 		&coll.RowVersion, &coll.DateCreated,
 	)
-
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrCollectionNotFound
+		}
 		return nil, err
 	}
 
 	return &coll, nil
 }
 
-// GetCollectionsByUserID fetches all collections for a user
+// GetCollectionsByUserID fetches all collections for a user.
 func (r *CollectionRepository) GetCollectionsByUserID(userID string) ([]*Collection, error) {
 	query := `
 		SELECT id, name, user_id, image_tag, row_version, date_created
@@ -94,7 +100,7 @@ func (r *CollectionRepository) GetCollectionsByUserID(userID string) ([]*Collect
 	return collections, rows.Err()
 }
 
-// GetCollectionDetails fetches collection with item count
+// GetCollectionDetails fetches a collection with its item count.
 func (r *CollectionRepository) GetCollectionDetails(id int) (*CollectionDetails, error) {
 	query := `
 		SELECT c.id, c.name, c.user_id, c.image_tag, c.row_version, c.date_created,
@@ -110,15 +116,17 @@ func (r *CollectionRepository) GetCollectionDetails(id int) (*CollectionDetails,
 		&details.ID, &details.Name, &details.UserID, &details.ImageTag,
 		&details.RowVersion, &details.DateCreated, &details.ItemCount,
 	)
-
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrCollectionNotFound
+		}
 		return nil, err
 	}
 
 	return &details, nil
 }
 
-// UpdateCollection updates a collection name
+// UpdateCollection updates a collection name.
 func (r *CollectionRepository) UpdateCollection(id int, name string) error {
 	query := `
 		UPDATE Collections
@@ -143,7 +151,7 @@ func (r *CollectionRepository) UpdateCollection(id int, name string) error {
 	return nil
 }
 
-// DeleteCollection removes a collection and its items (cascades)
+// DeleteCollection removes a collection and its items (cascade).
 func (r *CollectionRepository) DeleteCollection(id int) error {
 	query := `DELETE FROM Collections WHERE id = ?`
 
@@ -164,9 +172,8 @@ func (r *CollectionRepository) DeleteCollection(id int) error {
 	return nil
 }
 
-// AddItemToCollection adds a library item to a collection
+// AddItemToCollection adds a library item to a collection.
 func (r *CollectionRepository) AddItemToCollection(collectionID int, libraryItemID string, nextItemID *int) (*CollectionItem, error) {
-	// Get highest position item to set as previous
 	prevID, err := r.getLastItemInCollection(collectionID)
 	if err != nil {
 		return nil, err
@@ -197,7 +204,7 @@ func (r *CollectionRepository) AddItemToCollection(collectionID int, libraryItem
 	}, nil
 }
 
-// RemoveItemFromCollection removes a library item from a collection
+// RemoveItemFromCollection removes a library item from a collection.
 func (r *CollectionRepository) RemoveItemFromCollection(collectionID int, libraryItemID string) error {
 	query := `
 		DELETE FROM CollectionItems
@@ -221,7 +228,7 @@ func (r *CollectionRepository) RemoveItemFromCollection(collectionID int, librar
 	return nil
 }
 
-// GetCollectionItems retrieves all items in a collection ordered by position
+// GetCollectionItems retrieves all item IDs in a collection ordered by insertion.
 func (r *CollectionRepository) GetCollectionItems(collectionID int) ([]string, error) {
 	query := `
 		SELECT library_item_id
@@ -239,8 +246,7 @@ func (r *CollectionRepository) GetCollectionItems(collectionID int) ([]string, e
 	var items []string
 	for rows.Next() {
 		var itemID string
-		err := rows.Scan(&itemID)
-		if err != nil {
+		if err := rows.Scan(&itemID); err != nil {
 			return nil, err
 		}
 		items = append(items, itemID)
@@ -249,6 +255,8 @@ func (r *CollectionRepository) GetCollectionItems(collectionID int) ([]string, e
 	return items, rows.Err()
 }
 
+// getLastItemInCollection returns the id of the last item in the collection,
+// or nil if the collection is empty.
 func (r *CollectionRepository) getLastItemInCollection(collectionID int) (*int, error) {
 	query := `
 		SELECT id FROM CollectionItems
@@ -259,6 +267,9 @@ func (r *CollectionRepository) getLastItemInCollection(collectionID int) (*int, 
 	var id int
 	err := r.db.QueryRow(query, collectionID).Scan(&id)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
 

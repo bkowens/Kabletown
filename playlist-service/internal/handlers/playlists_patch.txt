@@ -1,0 +1,6 @@
+	// WritePaginated(w, "playlists", items, totalCount)
+	// if !result {
+	//	return
+	// }
+	response.WriteJSON(w, http.StatusOK, items)
+	return

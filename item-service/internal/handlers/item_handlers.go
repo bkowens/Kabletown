@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/bowens/kabletown/item-service/internal/db"
-	"github.com/bowens/kabletown/shared/response"
-	"github.com/bowens/kabletown/shared/types"
+	"kabletown/item-service/internal/db"
+	"github.com/jellyfinhanced/shared/response"
+	"github.com/jellyfinhanced/shared/types"
 )
 
 // GetItems retrieves items with optional filtering and pagination
@@ -51,7 +51,7 @@ func GetItems(w http.ResponseWriter, r *http.Request) {
 		items, total, err = []db.BaseItemDto{}, 0, nil
 	} else {
 		// No filter - return empty or handle as error
-		response.BadRequest(w, "Must provide parent_id, genre_ids, or type parameter")
+		response.WriteBadRequest(w, "Must provide parent_id, genre_ids, or type parameter")
 		return
 	}
 
@@ -60,11 +60,11 @@ func GetItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return paginated response (W5 compliance)
-	response.OK(w, response.QueryResult[db.BaseItemDto]{
-		Items:            items,
-		TotalRecordCount: total,
-		StartIndex:       startIndex,
+	// Return paginated response
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"Items":            items,
+		"TotalRecordCount": total,
+		"StartIndex":       startIndex,
 	})
 }
 
@@ -82,11 +82,11 @@ func GetItemById(w http.ResponseWriter, r *http.Request) {
 
 	item, err := itemRepo.GetById(itemID)
 	if err != nil {
-		response.NotFound(w, "Item not found")
+		response.WriteNotFound(w, "Item not found")
 		return
 	}
 
-	response.OK(w, item)
+	response.WriteJSON(w, http.StatusOK, item)
 }
 
 // GetRecentlyAdded retrieves recently added items
@@ -128,10 +128,10 @@ func GetRecentlyAdded(w http.ResponseWriter, r *http.Request) {
 		allItems = allItems[:limit]
 	}
 
-	response.OK(w, response.QueryResult[db.BaseItemDto]{
-		Items:            allItems,
-		TotalRecordCount: len(allItems),
-		StartIndex:       0,
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"Items":            allItems,
+		"TotalRecordCount": len(allItems),
+		"StartIndex":       0,
 	})
 }
 
@@ -166,9 +166,9 @@ func GetNextEpisode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if nextItem == nil {
-		response.OK(w, nil)
+		response.WriteJSON(w, http.StatusOK, nil)
 		return
 	}
 
-	response.OK(w, nextItem)
+	response.WriteJSON(w, http.StatusOK, nextItem)
 }

@@ -1,200 +1,272 @@
+// Package auth provides HTTP authentication middleware
 package auth
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"net/http"
+	"net/url"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/jellyfinhanced/shared/response"
+	"github.com/jellyfinhanced/shared/types"
+	"github.com/jmoiron/sqlx"
 )
 
-// contextKey is an unexported type for context keys to avoid collisions.
-type contextKey string
-
-// Context key constants for storing auth values in request context.
-const (
-	UserIDKey   contextKey = "userID"
-	DeviceIDKey contextKey = "deviceID"
-	TokenKey    contextKey = "token"
-	IsAdminKey  contextKey = "isAdmin"
-)
-
-// DeviceLookupFunc resolves a bearer token to a user identity.
-type DeviceLookupFunc func(token string) (userID string, isAdmin bool, err error)
-
-// ParseMediaBrowserHeader parses a Jellyfin/Emby MediaBrowser authorization header value.
-// The value is a comma-separated list of key="value" pairs, optionally prefixed with "MediaBrowser ".
-// Returns an error if the token field is absent.
-func ParseMediaBrowserHeader(header string) (token, deviceId, client, device, version string, err error) {
-	var tok, did, cli, dev, ver string
-
-	parts := strings.Split(header, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		// Strip the leading "MediaBrowser " scheme prefix if present on the first segment.
-		if strings.HasPrefix(part, "MediaBrowser ") {
-			part = strings.TrimSpace(strings.TrimPrefix(part, "MediaBrowser "))
+// AuthMiddleware wraps an http.Handler with authentication
+// Supports: X-Emby-Authorization header, api_key query param
+func AuthMiddleware(pool *sqlx.DB, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if endpoint is public/allow anonymous
+		if isPublicEndpoint(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
 		}
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(kv[0])
-		val := strings.TrimSpace(kv[1])
-		// Strip surrounding double-quotes from the value.
-		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
-			val = val[1 : len(val)-1]
-		}
-		switch key {
-		case "Token":
-			tok = val
-		case "DeviceId":
-			did = val
-		case "Client":
-			cli = val
-		case "Device":
-			dev = val
-		case "Version":
-			ver = val
-		}
-	}
 
-	if tok == "" {
-		return "", "", "", "", "", errors.New("auth: token not found in MediaBrowser header")
-	}
-	return tok, did, cli, dev, ver, nil
-}
-
-// ExtractToken extracts a bearer token from the request using Jellyfin auth conventions.
-// Priority order: X-Emby-Authorization header → Authorization header → api_key query param.
-func ExtractToken(r *http.Request) (token string, ok bool) {
-	// 1. X-Emby-Authorization header
-	if h := r.Header.Get("X-Emby-Authorization"); h != "" {
-		if tok, _, _, _, _, parseErr := ParseMediaBrowserHeader(h); parseErr == nil && tok != "" {
-			return tok, true
-		}
-	}
-
-	// 2. Authorization header (MediaBrowser scheme)
-	if h := r.Header.Get("Authorization"); h != "" && strings.HasPrefix(h, "MediaBrowser ") {
-		if tok, _, _, _, _, parseErr := ParseMediaBrowserHeader(h); parseErr == nil && tok != "" {
-			return tok, true
-		}
-		// Bare "MediaBrowser Token=<value>" without surrounding quotes
-		rest := strings.TrimSpace(strings.TrimPrefix(h, "MediaBrowser "))
-		if strings.HasPrefix(rest, "Token=") {
-			tok := strings.Trim(strings.TrimPrefix(rest, "Token="), "\"")
-			if tok != "" {
-				return tok, true
-			}
-		}
-	}
-
-	// 3. api_key query parameter
-	if key := r.URL.Query().Get("api_key"); key != "" {
-		return key, true
-	}
-
-	return "", false
-}
-
-// NewAuthMiddleware returns HTTP middleware that authenticates every request.
-// Requests whose path exactly matches an entry in anonymousPaths bypass auth.
-func NewAuthMiddleware(lookup DeviceLookupFunc, anonymousPaths []string) func(http.Handler) http.Handler {
-	anonSet := make(map[string]struct{}, len(anonymousPaths))
-	for _, p := range anonymousPaths {
-		anonSet[p] = struct{}{}
-	}
-
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Anonymous paths bypass authentication.
-			if _, isAnon := anonSet[r.URL.Path]; isAnon {
+		// Extract and validate auth from multiple sources
+		ctx, err := AuthenticateRequest(r, pool)
+		if err != nil {
+			// If no auth provided (not invalid), allow through for AllowAnonymous endpoints
+			if _, ok := err.(*NoAuthProvidedError); ok {
 				next.ServeHTTP(w, r)
 				return
 			}
+			response.WriteUnauthorized(w, "Unauthorized: "+err.Error())
+			return
+		}
 
-			// Extract bearer token from the request.
-			token, ok := ExtractToken(r)
-			if !ok {
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte(`{"Message":"Unauthorized","StatusCode":401}`)) //nolint:errcheck
-				return
-			}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
-			// Resolve token → userID + isAdmin.
-			userID, isAdmin, lookupErr := lookup(token)
-			if lookupErr != nil || userID == "" {
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte(`{"Message":"Unauthorized","StatusCode":401}`)) //nolint:errcheck
-				return
-			}
+// NoAuthProvidedError indicates no authentication was provided in the request
+type NoAuthProvidedError struct {
+	Message string
+}
 
-			// Propagate identity through context.
-			ctx := r.Context()
-			ctx = context.WithValue(ctx, UserIDKey, userID)
-			ctx = context.WithValue(ctx, IsAdminKey, isAdmin)
-			ctx = context.WithValue(ctx, TokenKey, token)
+func (e *NoAuthProvidedError) Error() string {
+	return e.Message
+}
 
-			// Extract DeviceId from the authorization header and store in context.
-			if h := r.Header.Get("X-Emby-Authorization"); h != "" {
-				if _, deviceID, _, _, _, parseErr := ParseMediaBrowserHeader(h); parseErr == nil && deviceID != "" {
-					ctx = context.WithValue(ctx, DeviceIDKey, deviceID)
+// AuthenticateRequest validates authentication from multiple sources
+// Returns NoAuthProvidedError if no auth headers/params found
+func AuthenticateRequest(r *http.Request, pool *sqlx.DB) (context.Context, error) {
+	ctx := r.Context()
+
+	// 1. Try X-Emby-Authorization header
+	authHeader := r.Header.Get("X-Emby-Authorization")
+	if authHeader != "" {
+		return AuthenticateFromHeader(ctx, authHeader, pool)
+	}
+
+	// 2. Try api_key query parameter
+	apiKey := r.URL.Query().Get("api_key")
+	if apiKey != "" {
+		return AuthenticateFromAPIKeyQuery(ctx, apiKey, pool)
+	}
+
+	// 3. No authentication provided - caller decides if allowed
+	return nil, &NoAuthProvidedError{"No authentication provided"}
+}
+
+// AuthenticateFromHeader validates X-Emby-Authorization header
+func AuthenticateFromHeader(ctx context.Context, authHeader string, pool *sqlx.DB) (context.Context, error) {
+	// Parse the MediaBrowser header
+	header, err := ParseMediaBrowserHeader(authHeader)
+	if err != nil {
+		return nil, &AuthError{"Invalid authorization header: " + err.Error()}
+	}
+
+	// Extract token
+	token := header.Token
+	if token == "" {
+		return nil, &AuthError{"Token missing in authorization header"}
+	}
+
+	// Validate token against database
+	info, err := ValidateToken(ctx, token, pool)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate context with auth info
+	ctx = SetAuthInContext(ctx, info)
+
+	return ctx, nil
+}
+
+// AuthenticateFromAPIKeyQuery validates api_key from query parameters
+func AuthenticateFromAPIKeyQuery(ctx context.Context, apiKey string, pool *sqlx.DB) (context.Context, error) {
+	// Validate API key format
+	if !types.ValidateTokenFormat(apiKey) {
+		return nil, &AuthError{"Invalid API key format"}
+	}
+
+	// Validate token against database
+	info, err := ValidateToken(ctx, apiKey, pool)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate context with auth info
+	ctx = SetAuthInContext(ctx, info)
+
+	return ctx, nil
+}
+
+// isPublicEndpoint checks if the path should skip authentication
+func isPublicEndpoint(path string) bool {
+	// Decode URL path to handle encoded characters
+	decodedPath, err := url.PathUnescape(path)
+	if err != nil {
+		decodedPath = path
+	}
+
+	// Public endpoints that don't require authentication
+	publicPaths := []string{
+		"/health",
+		"/healthcheck",
+		"/System/PublicStartupInfo",
+		"/Sessions",
+		"/Hls",
+		"/Stream",
+		"/Audio",
+		"/Items/\u003cid>/Primary",
+		"/Items/\u003cid>/Backdrop",
+		"/Items/\u003cid>/Logo",
+		"/Items/\u003cid>/Art",
+		"/Items/\u003cid>/Thumb",
+		"/Videos/\u003cid>/Stream",
+		"/Streams/Audio",
+		"/Streams/Video",
+		"/Items/\u003cid>/SpecialFeatures",
+		"/Items/\u003cid>/Latest",
+		"/Users/Public",
+	}
+
+	for _, pp := range publicPaths {
+		// Handle wildcard paths like /Items/{id}/Primary
+		if strings.Contains(pp, "\u003cid\u003e") {
+			// Check if path matches pattern (e.g., /Items/123/Primary)
+			parts := strings.Split(pp, "/")
+			requestParts := strings.Split(decodedPath, "/")
+			
+			if len(parts) == len(requestParts) {
+				match := true
+				for i := 0; i < len(parts); i++ {
+					if parts[i] != "\u003cid\u003e" && parts[i] != requestParts[i] {
+						match = false
+						break
+					}
+				}
+				if match {
+					return true
 				}
 			}
-
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+		} else {
+			if decodedPath == pp || (len(decodedPath) > len(pp) && decodedPath[:len(pp)+1] == pp+"/") {
+				return true
+			}
+		}
 	}
+
+	return false
 }
 
-// GetUserID returns the authenticated user ID stored in the request context.
-func GetUserID(r *http.Request) string {
-	v, _ := r.Context().Value(UserIDKey).(string)
-	return v
+// AuthError represents an authentication error
+type AuthError struct {
+	Message string
 }
 
-// GetDeviceID returns the device ID stored in the request context.
-func GetDeviceID(r *http.Request) string {
-	v, _ := r.Context().Value(DeviceIDKey).(string)
-	return v
+func (e *AuthError) Error() string {
+	return e.Message
 }
 
-// GetToken returns the bearer token stored in the request context.
-func GetToken(r *http.Request) string {
-	v, _ := r.Context().Value(TokenKey).(string)
-	return v
-}
+// ValidateToken validates an API token and returns associated user info
+func ValidateToken(ctx context.Context, token string, pool *sqlx.DB) (*AuthInfo, error) {
+	// Hash the token for DB lookup
+	tokenHash := types.HashToken(token)
 
-// IsAdmin returns true if the authenticated user has administrator privileges.
-func IsAdmin(r *http.Request) bool {
-	v, _ := r.Context().Value(IsAdminKey).(bool)
-	return v
-}
+	// Query for the API key
+	sqlQuery := `SELECT id, user_id, username, device_id, client, device, version, is_admin
+		FROM api_keys
+		WHERE token = ? AND (expires_at IS NULL OR expires_at > NOW())
+		LIMIT 1`
 
-// RequireAdmin is an HTTP middleware that returns 403 Forbidden when the caller is not an admin.
-func RequireAdmin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !IsAdmin(r) {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"Message":"Forbidden","StatusCode":403}`)) //nolint:errcheck
-			return
+	var (
+		id       uuid.UUID
+		userID   uuid.UUID
+		username string
+		deviceID uuid.UUID
+		client   string
+		device   string
+		version  string
+		isAdmin  bool
+	)
+
+	err := pool.QueryRowxContext(ctx, sqlQuery, tokenHash).Scan(
+		&id, &userID, &username, &deviceID, &client, &device, &version, &isAdmin,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &AuthError{"Token validation failed"}
 		}
-		next.ServeHTTP(w, r)
-	})
+		return nil, &AuthError{"Token validation error"}
+	}
+
+	return &AuthInfo{
+		UserID:   userID,
+		Username: username,
+		DeviceID: deviceID,
+		Token:    token,
+		IsAdmin:  isAdmin,
+		IsApiKey: true,
+		Client:   client,
+		Device:   device,
+		Version:  version,
+	}, nil
 }
 
-// RequireAuth is an HTTP middleware that returns 401 Unauthorized when no user ID is in context.
-func RequireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if GetUserID(r) == "" {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"Message":"Unauthorized","StatusCode":401}`)) //nolint:errcheck
-			return
+// ValidateSession validates a session token (alternative to API keys)
+func ValidateSession(ctx context.Context, sessionId string, pool *sqlx.DB) (*AuthInfo, error) {
+	// Query for the session
+	sqlQuery := `SELECT id, user_id, username, device_id, client, device, version, is_admin
+		FROM sessions
+		WHERE id = ? AND expiry > NOW()
+		LIMIT 1`
+
+	var (
+		userID   uuid.UUID
+		username string
+		deviceID uuid.UUID
+		client   string
+		device   string
+		version  string
+		isAdmin  bool
+	)
+
+	err := pool.QueryRowxContext(ctx, sqlQuery, sessionId).Scan(
+		&userID, &username, &deviceID, &client, &device, &version, &isAdmin,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &AuthError{"Session validation failed"}
 		}
-		next.ServeHTTP(w, r)
-	})
+		return nil, &AuthError{"Session validation error"}
+	}
+
+	return &AuthInfo{
+		UserID:   userID,
+		Username: username,
+		DeviceID: deviceID,
+		Token:    sessionId,
+		IsAdmin:  isAdmin,
+		IsApiKey: false,
+		Client:   client,
+		Device:   device,
+		Version:  version,
+	}, nil
 }

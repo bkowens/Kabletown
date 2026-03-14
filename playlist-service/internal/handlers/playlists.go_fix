@@ -1,0 +1,5 @@
+title := "Playlists"
+result := response.WritePaginated(w, title, items, totalCount)
+if !result {
+	return
+}

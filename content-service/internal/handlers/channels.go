@@ -5,26 +5,31 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jellyfinhanced/shared/logger"
+
+	"github.com/jellyfinhanced/shared/response"
 )
 
-var channelsLog = logger.NewLogger("channels-handler")
-
+// ChannelsHandler handles channel-related requests.
 type ChannelsHandler struct {
-	db  *sql.DB
+	db *sql.DB
 }
 
+// NewChannelsHandler creates a new ChannelsHandler.
 func NewChannelsHandler(dbPool *sql.DB) *ChannelsHandler {
 	return &ChannelsHandler{db: dbPool}
 }
 
+// GetChannels returns a list of channels (stub).
 func (h *ChannelsHandler) GetChannels(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	render.JSON(w, r, map[string]interface{}{"Items": []interface{}{}})
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"Items":            []interface{}{},
+		"TotalRecordCount": 0,
+		"StartIndex":       0,
+	})
 }
 
+// GetChannel returns a specific channel.
 func (h *ChannelsHandler) GetChannel(w http.ResponseWriter, r *http.Request) {
 	_ = chi.URLParam(r, "itemId")
-	w.WriteHeader(http.StatusOK)
-	render.JSON(w, r, map[string]interface{}{})
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{})
 }

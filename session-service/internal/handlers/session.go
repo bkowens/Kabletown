@@ -1,43 +1,40 @@
 package handlers
 
 import (
-	"context"
 	"database/sql"
+	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-sql-driver/mysql"
+
 	"github.com/jellyfinhanced/shared/auth"
-	"github.com/jellyfinhanced/shared/db"
-	"github.com/jellyfinhanced/shared/logger"
-	"kabletown/session-service/internal/models"
+	"github.com/jellyfinhanced/shared/response"
+	"github.com/jellyfinhanced/session-service/internal/models"
 )
 
-var sessionLog = logger.NewLogger("session-handler")
-
+// SessionHandler handles session-related requests.
 type SessionHandler struct {
-	db   *sql.DB
-	ctx  context.Context
+	db *sql.DB
 }
 
+// NewSessionHandler creates a new SessionHandler.
 func NewSessionHandler(dbPool *sql.DB) *SessionHandler {
-	return &SessionHandler{
-		db:  dbPool,
-		ctx: context.Background(),
-	}
+	return &SessionHandler{db: dbPool}
 }
 
-// GetSessions returns all active sessions
+// GetSessions returns all active sessions.
 func (h *SessionHandler) GetSessions(w http.ResponseWriter, r *http.Request) {
-	userID := auth.GetUserFromContext(r.Context())
+	userID := func() string { info, ok := auth.GetAuth(r.Context()); if !ok || info == nil { return "" }; return info.UserID.String() }()
 	query := `SELECT id, user_id, device_id, app_name, device_name, client, last_activity_date
 		FROM sessions WHERE user_id = ? OR user_id IS NULL ORDER BY last_activity_date DESC`
-	
+
 	rows, err := h.db.QueryContext(r.Context(), query, userID)
 	if err != nil {
-		sessionLog.Error("Failed to query sessions", "error", err, "user_id", userID)
-		http.Error(w, "Failed to retrieve sessions", http.StatusInternalServerError)
+		log.Printf("session-handler: GetSessions: query failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to retrieve sessions")
 		return
 	}
 	defer rows.Close()
@@ -45,273 +42,244 @@ func (h *SessionHandler) GetSessions(w http.ResponseWriter, r *http.Request) {
 	sessions := []models.Session{}
 	for rows.Next() {
 		var s models.Session
-		var userID sql.NullString
-		if err := rows.Scan(&s.ID, &userID, &s.DeviceID, &s.AppName, &s.DeviceName, &s.Client, &s.LastActivityDate); err != nil {
-			http.Error(w, "Failed to scan session", http.StatusInternalServerError)
+		var uid sql.NullString
+		if err := rows.Scan(&s.ID, &uid, &s.DeviceID, &s.AppName, &s.DeviceName, &s.Client, &s.LastActivityDate); err != nil {
+			response.WriteError(w, http.StatusInternalServerError, "Failed to scan session")
 			return
 		}
-		if userID.Valid {
-			s.UserID = userID.String
+		if uid.Valid {
+			s.UserID = uid.String
 		}
 		sessions = append(sessions, s)
 	}
 
-	render.JSON(w, r, sessions)
+	response.WriteJSON(w, http.StatusOK, sessions)
 }
 
-// CreateSession creates a new session
+// CreateSession creates a new session.
 func (h *SessionHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateSessionRequest
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	userID := auth.GetUserFromContext(r.Context())
+	userID := func() string { info, ok := auth.GetAuth(r.Context()); if !ok || info == nil { return "" }; return info.UserID.String() }()
 	if userID == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		response.WriteError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
-	sessionID := req.DeviceID // Use device ID as session ID or generate new one
-	
-	insertQuery := `INSERT INTO sessions (id, user_id, device_id, app_name, device_name, client, last_activity_date) 
+	sessionID := req.DeviceID
+
+	insertQuery := `INSERT INTO sessions (id, user_id, device_id, app_name, device_name, client, last_activity_date)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`
-	
+
 	_, err := h.db.ExecContext(r.Context(), insertQuery,
 		sessionID, userID, req.DeviceID, req.AppName, req.DeviceName, req.Client, time.Now())
 	if err != nil {
 		if mysqlErr, ok := err.(*mysql.MySQLError); ok && mysqlErr.Number == 1062 {
-			// Session already exists, update it
 			updateQuery := `UPDATE sessions SET last_activity_date = ?, device_name = ?, client = ? WHERE id = ?`
 			_, err = h.db.ExecContext(r.Context(), updateQuery, time.Now(), req.DeviceName, req.Client, sessionID)
 			if err != nil {
-				sessionLog.Error("Failed to update existing session", "error", err)
-				http.Error(w, "Failed to update session", http.StatusInternalServerError)
+				log.Printf("session-handler: CreateSession: update failed: %v", err)
+				response.WriteError(w, http.StatusInternalServerError, "Failed to update session")
 				return
 			}
 		} else {
-			sessionLog.Error("Failed to create session", "error", err)
-			http.Error(w, "Failed to create session", http.StatusInternalServerError)
+			log.Printf("session-handler: CreateSession: insert failed: %v", err)
+			response.WriteError(w, http.StatusInternalServerError, "Failed to create session")
 			return
 		}
 	}
 
-	w.WriteHeader(http.StatusCreated)
-	render.JSON(w, r, map[string]string{"id": sessionID})
+	response.WriteJSON(w, http.StatusCreated, map[string]string{"Id": sessionID})
 }
 
-// GetSession returns a specific session
+// GetSession returns a specific session.
 func (h *SessionHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	user
+
 	query := `SELECT id, user_id, device_id, app_name, device_name, client, last_activity_date
 		FROM sessions WHERE id = ?`
-	
+
 	var s models.Session
-	var userID sql.NullString
+	var uid sql.NullString
 	err := h.db.QueryRowContext(r.Context(), query, sessionID).Scan(
-		&s.ID, &userID, &s.DeviceID, &s.AppName, &s.DeviceName, &s.Client, &s.LastActivityDate)
+		&s.ID, &uid, &s.DeviceID, &s.AppName, &s.DeviceName, &s.Client, &s.LastActivityDate)
 	if err == sql.ErrNoRows {
-		http.Error(w, "Session not found", http.StatusNotFound)
+		response.WriteError(w, http.StatusNotFound, "Session not found")
 		return
 	}
 	if err != nil {
-		sessionLog.Error("Failed to query session", "error", err)
-		http.Error(w, "Failed to retrieve session", http.StatusInternalServerError)
+		log.Printf("session-handler: GetSession: query failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to retrieve session")
 		return
 	}
-	if userID.Valid {
-		s.UserID = userID.String
+	if uid.Valid {
+		s.UserID = uid.String
 	}
 
-	render.JSON(w, r, s)
+	response.WriteJSON(w, http.StatusOK, s)
 }
 
-// ReportSessionActivity updates session activity
+// ReportSessionActivity updates session activity.
 func (h *SessionHandler) ReportSessionActivity(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	
+
 	updateQuery := `UPDATE sessions SET last_activity_date = ? WHERE id = ?`
 	_, err := h.db.ExecContext(r.Context(), updateQuery, time.Now(), sessionID)
 	if err != nil {
-		sessionLog.Error("Failed to update session activity", "error", err)
-		http.Error(w, "Failed to update activity", http.StatusInternalServerError)
+		log.Printf("session-handler: ReportSessionActivity: update failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to update activity")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// ReportViewingItem tracks what item a session is viewing
-func (h *SessionHandler) ReportViewingItem(w http.ResponseWriter, r *http.Request) {
-	sessionID := chi.URLParam(r, "sessionId")
-	itemID := chi.URLParam(r, "itemId")
-
-	// Insert or update viewing item record
-	query := `INSERT INTO session_viewing (session_id, item_id, viewed_at) 
-		VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE viewed_at = ?`
-	
-	_, err := h.db.ExecContext(r.Context(), query, sessionID, itemID, time.Now(), time.Now())
-	if err != nil {
-		sessionLog.Error("Failed to report viewing item", "error", err)
-		http.Error(w, "Failed to report viewing", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-// ReportPlaying reports playback state
+// ReportPlaying reports playback state (started or progress).
 func (h *SessionHandler) ReportPlaying(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	
+
 	var req models.PlaybackState
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		// At minimum we have session ID, just update activity
-		h.ReportSessionActivity(w, r)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Minimal update — just touch activity date.
+		updateQuery := `UPDATE sessions SET last_activity_date = ? WHERE id = ?`
+		h.db.ExecContext(r.Context(), updateQuery, time.Now(), sessionID) //nolint:errcheck
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	// Store playback state
 	query := `INSERT INTO playback_state (session_id, item_id, play_position_ticks, is_playing, last_reported)
 		VALUES (?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE play_position_ticks = ?, is_playing = ?, last_reported = ?`
-	
+
 	_, err := h.db.ExecContext(r.Context(), query,
 		sessionID, req.ItemID, req.PlayPositionTicks, req.IsPlaying, time.Now(),
 		req.PlayPositionTicks, req.IsPlaying, time.Now())
 	if err != nil {
-		sessionLog.Error("Failed to report playback state", "error", err)
-		http.Error(w, "Failed to report playback", http.StatusInternalServerError)
+		log.Printf("session-handler: ReportPlaying: exec failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to report playback")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// ReportStopped reports playback stopped
+// ReportStopped reports playback stopped.
 func (h *SessionHandler) ReportStopped(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	
+
 	var req models.PlaybackState
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		h.ReportSessionActivity(w, r)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	// Update playback state to stopped
 	query := `UPDATE playback_state SET is_playing = ?, last_reported = ? WHERE session_id = ?`
 	_, err := h.db.ExecContext(r.Context(), query, false, time.Now(), sessionID)
 	if err != nil {
-		sessionLog.Error("Failed to report stopped state", "error", err)
-		http.Error(w, "Failed to report stopped", http.StatusInternalServerError)
+		log.Printf("session-handler: ReportStopped: update failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to report stopped")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// UpdateSessionCapability updates session capability info
+// UpdateSessionCapability updates session capability info.
 func (h *SessionHandler) UpdateSessionCapability(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	
+
 	var req models.SessionCapability
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	// Store capability info (simplified)
 	query := `UPDATE sessions SET capabilities = ? WHERE id = ?`
-	_, err := h.db.ExecContext(r.Context(), query, req.toJSON(), sessionID)
+	_, err := h.db.ExecContext(r.Context(), query, req.ToJSON(), sessionID)
 	if err != nil {
-		sessionLog.Error("Failed to update capability", "error", err)
-		http.Error(w, "Failed to update capability", http.StatusInternalServerError)
+		log.Printf("session-handler: UpdateSessionCapability: update failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to update capability")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// SendMessageToSession sends a message to a specific session
+// SendMessageToSession sends a message to a specific session.
 func (h *SessionHandler) SendMessageToSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	
+
 	var req models.MessageRequest
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		http.Error(w, "Invalid message", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "Invalid message")
 		return
 	}
 
-	// Queue message for delivery (could use WebSocket/Redis PubSub in production)
 	query := `INSERT INTO session_messages (session_id, message_type, header, text, timeout_ms, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`
-	
+
 	_, err := h.db.ExecContext(r.Context(), query,
 		sessionID, req.MessageType, req.Header, req.Text, req.TimeoutMS, time.Now())
 	if err != nil {
-		sessionLog.Error("Failed to queue message", "error", err)
-		http.Error(w, "Failed to send message", http.StatusInternalServerError)
+		log.Printf("session-handler: SendMessageToSession: insert failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to send message")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// CloseSession closes the current session
+// CloseSession closes the current session (DELETE /Sessions/Logout).
 func (h *SessionHandler) CloseSession(w http.ResponseWriter, r *http.Request) {
-	sessionID := chi.URLParam(r, "sessionId")
-	
-	deleteQuery := `DELETE FROM sessions WHERE id = ?`
-	result, err := h.db.ExecContext(r.Context(), deleteQuery, sessionID)
+	userID := func() string { info, ok := auth.GetAuth(r.Context()); if !ok || info == nil { return "" }; return info.UserID.String() }()
+
+	deleteQuery := `DELETE FROM sessions WHERE user_id = ?`
+	_, err := h.db.ExecContext(r.Context(), deleteQuery, userID)
 	if err != nil {
-		sessionLog.Error("Failed to delete session", "error", err)
-		http.Error(w, "Failed to delete session", http.StatusInternalServerError)
+		log.Printf("session-handler: CloseSession: delete failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to delete session")
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		http.Error(w, "Session not found", http.StatusNotFound)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// CloseSpecificSession closes a specific session
+// CloseSpecificSession closes a specific session.
 func (h *SessionHandler) CloseSpecificSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	
+
 	deleteQuery := `DELETE FROM sessions WHERE id = ?`
 	result, err := h.db.ExecContext(r.Context(), deleteQuery, sessionID)
 	if err != nil {
-		sessionLog.Error("Failed to delete session", "error", err)
-		http.Error(w, "Failed to delete session", http.StatusInternalServerError)
+		log.Printf("session-handler: CloseSpecificSession: delete failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to delete session")
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		http.Error(w, "Session not found", http.StatusNotFound)
+		response.WriteError(w, http.StatusNotFound, "Session not found")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// KeepAlive extends the session timeout
+// KeepAlive extends the session timeout.
 func (h *SessionHandler) KeepAlive(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	
+
 	query := `UPDATE sessions SET last_activity_date = ? WHERE id = ?`
 	_, err := h.db.ExecContext(r.Context(), query, time.Now(), sessionID)
 	if err != nil {
-		sessionLog.Error("Failed to update session keepalive", "error", err)
-		http.Error(w, "Failed to keepalive", http.StatusInternalServerError)
+		log.Printf("session-handler: KeepAlive: update failed: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "Failed to keepalive")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }

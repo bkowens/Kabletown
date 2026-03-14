@@ -16,7 +16,6 @@ import (
     "github.com/go-chi/chi/v5/middleware"
     "github.com/go-chi/cors"
     _ "github.com/go-sql-driver/mysql"
-    "kabletown/shared/auth"
 )
 
 var (
@@ -46,8 +45,6 @@ func (s *Server) setupMiddleware() {
     s.router.Use(middleware.Logger)
     s.router.Use(middleware.Recoverer)
     s.router.Use(middleware.RequestID)
-    s.router.Timeout(0) // Disable timeout for streaming (handled per-request)
-    
     s.router.Use(cors.Handler(cors.Options{
         AllowedOrigins:  []string{"*"},
         AllowedMethods:  []string{"GET", "HEAD", "OPTIONS"},
@@ -62,10 +59,8 @@ func (s *Server) setupRoutes() {
     s.router.Get("/health", s.healthHandler)
     s.router.Get("/ready", s.readyHandler)
 
-    // Protected streaming routes
-    api := s.router.Group(func(r chi.Router) {
-        r.Use(auth.DBTokenValidator(s.db))
-        
+    // Streaming routes
+    s.router.Group(func(r chi.Router) {
         // HLS Master Playlist
         r.Get("/Videos/{itemId}/master.m3u8", s.masterPlaylistHandler)
         
@@ -116,7 +111,7 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) masterPlaylistHandler(w http.ResponseWriter, r *http.Request) {
-    itemId := chi.URLParam(r, "itemId")
+    _ = chi.URLParam(r, "itemId")
     
     // Build Master Playlist (see internal/hls/master.go)
     // Ref: docs/hls-streaming-routes.md
@@ -138,7 +133,7 @@ stream_480p.m3u8
 }
 
 func (s *Server) variantPlaylistHandler(w http.ResponseWriter, r *http.Request) {
-    itemId := chi.URLParam(r, "itemId")
+    _ = chi.URLParam(r, "itemId")
     
     // Build Variant Playlist (see internal/hls/variant.go)
     
@@ -161,8 +156,8 @@ segment_2.ts
 }
 
 func (s *Server) hlsSegmentHandler(w http.ResponseWriter, r *http.Request) {
-    itemId := chi.URLParam(r, "itemId")
-    segmentId := chi.URLParam(r, "segmentId")
+    _ = chi.URLParam(r, "itemId")
+    _ = chi.URLParam(r, "segmentId")
     
     // Fetch segment from transcode-service or cache (see internal/hls/segment.go)
     // Ref: docs/hls-streaming-routes.md
@@ -176,7 +171,7 @@ func (s *Server) hlsSegmentHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) progressiveStreamHandler(w http.ResponseWriter, r *http.Request) {
-    itemId := chi.URLParam(r, "itemId")
+    _ = chi.URLParam(r, "itemId")
     
     // Progressive download/stream (see internal/handlers/progressive.go)
     // Check if direct play or needs transcoding
@@ -185,9 +180,9 @@ func (s *Server) progressiveStreamHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) hlsFromTranscodeHandler(w http.ResponseWriter, r *http.Request) {
-    itemId := chi.URLParam(r, "id")
-    container := chi.URLParam(r, "container")
-    segmentId := chi.URLParam(r, "segmentId")
+    _ = chi.URLParam(r, "id")
+    _ = chi.URLParam(r, "container")
+    _ = chi.URLParam(r, "segmentId")
     
     // Proxy to transcode-service for on-demand segments
     // This calls internal transcode-service endpoint

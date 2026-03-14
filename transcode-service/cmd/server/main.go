@@ -1,231 +1,275 @@
 package main
 
 import (
-    "context"
-    "database/sql"
-    "encoding/json"
-    "fmt"
-    "log"
-    "net/http"
-    "os"
-    "os/exec"
-    "os/signal"
-    "sync"
-    "syscall"
-    "time"
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
 
-    "github.com/go-chi/chi/v5"
-    "github.com/go-chi/chi/v5/middleware"
-    "github.com/go-chi/cors"
-    _ "github.com/go-sql-driver/mysql"
-    "kabletown/shared/auth"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"github.com/jellyfinhanced/shared/auth"
+	"github.com/jellyfinhanced/shared/db"
+	"github.com/jmoiron/sqlx"
 )
-
-var (
-    dbDSN           = os.Getenv("DB_DSN")
-    serverPort      = os.Getenv("TRANCODE_SERVICE_PORT")
-    serviceName     = "transcode-service"
-    ffmpegPath      = os.Getenv("FFMPEG_PATH")
-    transcodingPath = os.Getenv("TRANSCODING_PATH")
-)
-
-type TranscodeManager struct {
-    mu         sync.RWMutex
-    activeJobs map[string]*TranscodeJob
-    killTimer  map[string]int64
-}
 
 type TranscodeJob struct {
-    ID                 string
-    ItemId             string
-    UserId             string
-    DeviceId           string
-    StartTime          time.Time
-    LastAccessTime     time.Time
-    SegmentDuration    int
-    IsLiveOutput       bool
-    FFmpegProcess      *exec.Cmd
-    ActiveRequestCount int
+	ID        string    `json:"id"`
+	ItemId    string    `json:"itemId"`
+	UserId    string    `json:"userId"`
+	DeviceId  string    `json:"deviceId"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type TranscodeManager struct {
+	mu         sync.RWMutex
+	activeJobs map[string]*TranscodeJob
+	jobQueue   []string
 }
 
 func NewTranscodeManager() *TranscodeManager {
-    return &TranscodeManager{
-        activeJobs: make(map[string]*TranscodeJob),
-        killTimer:  make(map[string]int64),
-    }
+	return &TranscodeManager{
+		activeJobs: make(map[string]*TranscodeJob),
+		jobQueue:   make([]string, 0),
+	}
 }
 
 func (tm *TranscodeManager) CreateJob(itemId, userId, deviceId string) string {
-    jobId := fmt.Sprintf("job_%d", time.Now().UnixNano())
-    tm.mu.Lock()
-    tm.activeJobs[jobId] = &TranscodeJob{
-        ID: jobId, ItemId: itemId, UserId: userId, DeviceId: deviceId,
-        StartTime:      time.Now(),
-        LastAccessTime: time.Now(),
-        SegmentDuration: 6,
-        ActiveRequestCount: 0,
-    }
-    tm.killTimer[jobId] = time.Now().Add(60 * time.Second).Unix()
-    tm.mu.Unlock()
-    return jobId
-}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 
-func (tm *TranscodeManager) BeginRequest(jobId string) {
-    tm.mu.Lock()
-    defer tm.mu.Unlock()
-    if job, ok := tm.activeJobs[jobId]; ok {
-        job.ActiveRequestCount++
-        job.LastAccessTime = time.Now()
-        tm.killTimer[jobId] = time.Now().Add(60 * time.Second).Unix()
-    }
-}
+	jobID := itemId + "-" + userId + "-" + deviceId + "-" + time.Now().Format(time.RFC3339)
+	job := &TranscodeJob{
+		ID:        jobID,
+		ItemId:    itemId,
+		UserId:    userId,
+		DeviceId:  deviceId,
+		Status:    "pending",
+		CreatedAt: time.Now(),
+	}
 
-func (tm *TranscodeManager) EndRequest(jobId string) {
-    tm.mu.Lock()
-    defer tm.mu.Unlock()
-    if job, ok := tm.activeJobs[jobId]; ok {
-        job.ActiveRequestCount--
-    }
+	tm.activeJobs[jobID] = job
+	tm.jobQueue = append(tm.jobQueue, jobID)
+
+	return jobID
 }
 
 type Server struct {
-    router       *chi.Mux
-    db           *sql.DB
-    transcodeMgr *TranscodeManager
+	db           *sqlx.DB
+	router       *chi.Mux
+	transcodeMgr *TranscodeManager
 }
 
-func NewServer(db *sql.DB, port string) *Server {
-    s := &Server{router: chi.NewRouter(), db: db, transcodeMgr: NewTranscodeManager()}
-    s.setupMiddleware()
-    s.setupRoutes()
-    return s
-}
+func NewServer(database *sqlx.DB) *Server {
+	svr := &Server{
+		db:           database,
+		router:       chi.NewRouter(),
+		transcodeMgr: NewTranscodeManager(),
+	}
 
-func (s *Server) setupMiddleware() {
-    s.router.Use(middleware.Logger)
-    s.router.Use(middleware.Recoverer)
-    s.router.Use(middleware.RequestID)
-    s.router.Use(cors.Handler(cors.Options{
-        AllowedOrigins:   []string{"*"},
-        AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-        AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Emby-Authorization"},
-        ExposedHeaders:   []string{"Link"},
-        AllowCredentials: true,
-        MaxAge:           300,
-    }))
+	svr.setupRoutes()
+	return svr
 }
 
 func (s *Server) setupRoutes() {
-    s.router.Get("/health", s.healthHandler)
-    s.router.Get("/ready", s.readyHandler)
-    api := s.router.Group(func(r chi.Router) {
-        r.Use(auth.DBTokenValidator(s.db))
-        r.Post("/transcodes", s.createTranscodeHandler)
-        r.Get("/transcodes", s.listTranscodesHandler)
-        s.router.Delete("/transcodes/{id}", s.cancelTranscodeHandler)
-        s.router.Post("/transcodes/{id}/lock", s.lockTranscodeHandler)
-        s.router.Post("/transcodes/{id}/begin", s.beginRequestHandler)
-        s.router.Post("/transcodes/{id}/end", s.endRequestHandler)
-    })
+	s.router.Use(middleware.Logger)
+	s.router.Use(middleware.Recoverer)
+	s.router.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Emby-Authorization"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	s.router.Get("/health", s.healthHandler)
+	s.router.Get("/ready", s.readyHandler)
+
+	// Protected routes - wrap router with auth middleware
+	s.router.Group(func(r chi.Router) {
+		r.Use(func(h http.Handler) http.Handler {
+			return auth.AuthMiddleware(s.db, h)
+		})
+		r.Post("/transcodes", s.createTranscodeHandler)
+		r.Get("/transcodes", s.listTranscodesHandler)
+		r.Delete("/transcodes/{id}", s.cancelTranscodeHandler)
+		r.Post("/transcodes/{id}/lock", s.lockTranscodeHandler)
+		r.Post("/transcodes/{id}/begin", s.beginRequestHandler)
+		r.Post("/transcodes/{id}/end", s.endRequestHandler)
+	})
 }
 
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
-    s.transcodeMgr.mu.RLock()
-    count := len(s.transcodeMgr.activeJobs)
-    s.transcodeMgr.mu.RUnlock()
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "service": serviceName, "status": "healthy", "activeJobs": count,
-    })
+	s.transcodeMgr.mu.RLock()
+	count := len(s.transcodeMgr.activeJobs)
+	s.transcodeMgr.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "healthy",
+		"activeJobs": count,
+		"timestamp":  time.Now().Unix(),
+	})
 }
 
 func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
-    ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-    defer cancel()
-    if err := s.db.PingContext(ctx); err != nil {
-        w.Header().Set("Content-Type", "application/json")
-        w.WriteHeader(http.StatusServiceUnavailable)
-        json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
-        return
-    }
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+	// Check DB connection
+	if err := s.db.Ping(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"status": "not ready", "error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 }
 
 func (s *Server) createTranscodeHandler(w http.ResponseWriter, r *http.Request) {
-    var req struct { ItemId string <json:"itemId"> UserId string <json:"userId"> DeviceId string <json:"deviceId"> }
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "Invalid request", http.StatusBadRequest)
-        return
-    }
-    jobId := s.transcodeMgr.CreateJob(req.ItemId, req.UserId, req.DeviceId)
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]string{"jobId": jobId, "status": "created"})
+	var req struct {
+		ItemId   string `json:"itemId"`
+		UserId   string `json:"userId"`
+		DeviceId string `json:"deviceId"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.ItemId == "" && req.UserId == "" && req.DeviceId == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	jobID := s.transcodeMgr.CreateJob(req.ItemId, req.UserId, req.DeviceId)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"jobId": jobID, "status": "created"})
 }
 
 func (s *Server) listTranscodesHandler(w http.ResponseWriter, r *http.Request) {
-    s.transcodeMgr.mu.RLock()
-    jobs := []map[string]interface{}{}
-    for _, job := range s.transcodeMgr.activeJobs {
-        jobs = append(jobs, map[string]interface{}{"jobId": job.ID, "activeRequests": job.ActiveRequestCount})
-    }
-    s.transcodeMgr.mu.RUnlock()
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(jobs)
+	s.transcodeMgr.mu.RLock()
+	defer s.transcodeMgr.mu.RUnlock()
+
+	jobs := make([]*TranscodeJob, 0, len(s.transcodeMgr.activeJobs))
+	for _, job := range s.transcodeMgr.activeJobs {
+		jobs = append(jobs, job)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(jobs)
 }
 
 func (s *Server) cancelTranscodeHandler(w http.ResponseWriter, r *http.Request) {
-    jobId := chi.URLParam(r, "id")
-    s.transcodeMgr.mu.Lock()
-    defer s.transcodeMgr.mu.Unlock()
-    if job, ok := s.transcodeMgr.activeJobs[jobId]; ok {
-        if job.FFmpegProcess != nil && job.FFmpegProcess.Process != nil {
-            job.FFmpegProcess.Process.Kill()
-        }
-        delete(s.transcodeMgr.activeJobs, jobId)
-        delete(s.transcodeMgr.killTimer, jobId)
-    }
-    w.WriteHeader(http.StatusOK)
+	jobID := chi.URLParam(r, "id")
+
+	s.transcodeMgr.mu.Lock()
+	delete(s.transcodeMgr.activeJobs, jobID)
+	s.transcodeMgr.mu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) lockTranscodeHandler(w http.ResponseWriter, r *http.Request) {
-    w.WriteHeader(http.StatusOK)
+	jobID := chi.URLParam(r, "id")
+
+	s.transcodeMgr.mu.Lock()
+	if job, ok := s.transcodeMgr.activeJobs[jobID]; ok {
+		job.Status = "locked"
+		s.transcodeMgr.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "locked", "jobId": jobID})
+		return
+	}
+	s.transcodeMgr.mu.Unlock()
+
+	http.Error(w, "Job not found", http.StatusNotFound)
 }
 
 func (s *Server) beginRequestHandler(w http.ResponseWriter, r *http.Request) {
-    s.transcodeMgr.BeginRequest(chi.URLParam(r, "id"))
-    w.WriteHeader(http.StatusOK)
+	jobID := chi.URLParam(r, "id")
+
+	s.transcodeMgr.mu.Lock()
+	if job, ok := s.transcodeMgr.activeJobs[jobID]; ok {
+		job.Status = "running"
+		s.transcodeMgr.activeJobs[jobID] = job
+		s.transcodeMgr.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "running", "jobId": jobID})
+		return
+	}
+	s.transcodeMgr.mu.Unlock()
+
+	http.Error(w, "Job not found", http.StatusNotFound)
 }
 
 func (s *Server) endRequestHandler(w http.ResponseWriter, r *http.Request) {
-    s.transcodeMgr.EndRequest(chi.URLParam(r, "id"))
-    w.WriteHeader(http.StatusOK)
+	jobID := chi.URLParam(r, "id")
+
+	s.transcodeMgr.mu.Lock()
+	if job, ok := s.transcodeMgr.activeJobs[jobID]; ok {
+		job.Status = "completed"
+		s.transcodeMgr.activeJobs[jobID] = job
+
+		// Remove from memory after completion
+		go func() {
+			time.Sleep(5 * time.Minute)
+			s.transcodeMgr.mu.Lock()
+			delete(s.transcodeMgr.activeJobs, jobID)
+			s.transcodeMgr.mu.Unlock()
+		}()
+
+		s.transcodeMgr.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "completed", "jobId": jobID})
+		return
+	}
+	s.transcodeMgr.mu.Unlock()
+
+	http.Error(w, "Job not found", http.StatusNotFound)
 }
 
 func main() {
-    if dbDSN == "" { log.Fatal("DB_DSN required") }
-    if ffmpegPath == "" { ffmpegPath = "ffmpeg" }
-    if transcodingPath == "" { transcodingPath = "/tmp/transcoding" }
-    os.MkdirAll(transcodingPath, 0755)
+	// Build DSN from environment variables
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "3306")
+	dbUser := getEnv("DB_USER", "root")
+	dbPass := getEnv("DB_PASS", "")
+	dbName := getEnv("DB_NAME", "kabletown")
 
-    db, err := sql.Open("mysql", dbDSN)
-    if err != nil { log.Fatalf("DB error: %v", err) }
-    defer db.Close()
-    if err := db.Ping(); err != nil { log.Fatalf("DB ping: %v", err) }
+	dsn := dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?parseTime=true"
 
-    port := fmt.Sprintf(":%s", serverPort)
-    server := NewServer(db, serverPort)
-    log.Printf("Starting %s on %s", serviceName, port)
+	dbPool, err := db.NewDB(dsn)
+	if err != nil {
+		log.Fatalf("Failed to create database connection: %v", err)
+	}
+	defer dbPool.Close()
 
-    httpServer := &http.Server{Addr: port, Handler: server.router}
-    go func() {
-        quit := make(chan os.Signal, 1)
-        signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-        <-quit
-        s := httpServer.Shutdown
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
-        s(ctx)
-    }()
-    httpServer.ListenAndServe()
+	svr := NewServer(dbPool)
+
+	port := getEnv("PORT", "8011")
+	log.Printf("Transcode service starting on port %s", port)
+	log.Println("Press Ctrl+C to exit")
+
+	if err := http.ListenAndServe(":"+port, svr.router); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func getEnv(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return strings.TrimSpace(val)
+	}
+	return defaultVal
 }

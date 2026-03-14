@@ -7,57 +7,57 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/bowens/kabletown/user-service/internal/db"
-	"github.com/bowens/kabletown/user-service/internal/dto"
-	"github.com/bowens/kabletown/shared/auth"
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/user-service/internal/db"
+	"github.com/jellyfinhanced/user-service/internal/dto"
+	"github.com/jellyfinhanced/shared/auth"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 // ListUsers handles GET /Users.
 // Admins get all users; non-admins get only themselves.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
-	callerID := auth.GetUserID(r)
-	isAdmin := auth.IsAdmin(r)
+	callerID := auth.GetUserIDAsGUID(r.Context())
+	isAdmin := auth.IsAdminFromContext(r.Context())
 
 	if isAdmin {
 		users, err := h.userRepo.ListUsers()
 		if err != nil {
-			response.Error(w, http.StatusInternalServerError, "failed to list users")
+			response.WriteError(w, http.StatusInternalServerError, "failed to list users")
 			return
 		}
 		dtos := make([]dto.UserDto, 0, len(users))
 		for i := range users {
 			dtos = append(dtos, *userToDto(&users[i], h.serverID))
 		}
-		response.JSON(w, http.StatusOK, dtos)
+		response.WriteJSON(w, http.StatusOK, dtos)
 		return
 	}
 
 	user, err := h.userRepo.GetUserByID(callerID)
 	if err != nil || user == nil {
-		response.Error(w, http.StatusNotFound, "user not found")
+		response.WriteError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	response.JSON(w, http.StatusOK, []dto.UserDto{*userToDto(user, h.serverID)})
+	response.WriteJSON(w, http.StatusOK, []dto.UserDto{*userToDto(user, h.serverID)})
 }
 
 // GetUser handles GET /Users/{userId}.
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userId")
-	callerID := auth.GetUserID(r)
+	callerID := auth.GetUserIDAsGUID(r.Context())
 
 	if targetID == "me" {
 		targetID = callerID
 	}
 
-	if targetID != callerID && !auth.IsAdmin(r) {
-		response.Error(w, http.StatusForbidden, "Access denied")
+	if targetID != callerID && !auth.IsAdminFromContext(r.Context()) {
+		response.WriteError(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
 	user, err := h.userRepo.GetUserByID(targetID)
 	if err != nil || user == nil {
-		response.Error(w, http.StatusNotFound, "User not found")
+		response.WriteError(w, http.StatusNotFound, "User not found")
 		return
 	}
 
@@ -82,45 +82,45 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 		d.Configuration = defaultConfig()
 	}
 
-	response.JSON(w, http.StatusOK, d)
+	response.WriteJSON(w, http.StatusOK, d)
 }
 
 // CreateUser handles POST /Users/New (admin only).
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var req dto.CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Name == "" {
-		response.Error(w, http.StatusBadRequest, "Name is required")
+		response.WriteError(w, http.StatusBadRequest, "Name is required")
 		return
 	}
 
 	user, err := h.userRepo.CreateUser(req.Name, req.Password)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to create user")
+		response.WriteError(w, http.StatusInternalServerError, "failed to create user")
 		return
 	}
 	d := userToDto(user, h.serverID)
 	d.Policy = defaultPolicy(false)
 	d.Configuration = defaultConfig()
-	response.JSON(w, http.StatusOK, d)
+	response.WriteJSON(w, http.StatusOK, d)
 }
 
 // UpdateUser handles PUT /Users/{userId}.
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userId")
-	callerID := auth.GetUserID(r)
+	callerID := auth.GetUserIDAsGUID(r.Context())
 
-	if targetID != callerID && !auth.IsAdmin(r) {
-		response.Error(w, http.StatusForbidden, "Access denied")
+	if targetID != callerID && !auth.IsAdminFromContext(r.Context()) {
+		response.WriteError(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
 	var req dto.UpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -131,7 +131,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.userRepo.UpdateUser(targetID, req.Name, cfgJSON, ""); err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to update user")
+		response.WriteError(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -141,7 +141,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userId")
 	if err := h.userRepo.DeleteUser(targetID); err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to delete user")
+		response.WriteError(w, http.StatusInternalServerError, "failed to delete user")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -150,34 +150,34 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 // ChangePassword handles POST /Users/{userId}/Password.
 func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userId")
-	callerID := auth.GetUserID(r)
+	callerID := auth.GetUserIDAsGUID(r.Context())
 
-	if targetID != callerID && !auth.IsAdmin(r) {
-		response.Error(w, http.StatusForbidden, "Access denied")
+	if targetID != callerID && !auth.IsAdminFromContext(r.Context()) {
+		response.WriteError(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
 	var req dto.ChangePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	// Non-admins must supply the current password.
-	if !auth.IsAdmin(r) && !req.ResetPassword {
+	if !auth.IsAdminFromContext(r.Context()) && !req.ResetPassword {
 		user, err := h.userRepo.GetUserByID(targetID)
 		if err != nil || user == nil {
-			response.Error(w, http.StatusNotFound, "User not found")
+			response.WriteError(w, http.StatusNotFound, "User not found")
 			return
 		}
 		if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.CurrentPw)) != nil {
-			response.Error(w, http.StatusUnauthorized, "Current password is incorrect")
+			response.WriteError(w, http.StatusUnauthorized, "Current password is incorrect")
 			return
 		}
 	}
 
 	if err := h.userRepo.UpdatePassword(targetID, req.NewPw); err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to update password")
+		response.WriteError(w, http.StatusInternalServerError, "failed to update password")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -189,13 +189,13 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	var pol dto.UserPolicyDto
 	if err := json.NewDecoder(r.Body).Decode(&pol); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	b, _ := json.Marshal(pol)
 	if err := h.userRepo.UpdateUser(targetID, "", "", string(b)); err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to update policy")
+		response.WriteError(w, http.StatusInternalServerError, "failed to update policy")
 		return
 	}
 
@@ -216,22 +216,22 @@ func (h *Handler) UpdatePolicy(w http.ResponseWriter, r *http.Request) {
 // UpdateConfiguration handles POST /Users/{userId}/Configuration.
 func (h *Handler) UpdateConfiguration(w http.ResponseWriter, r *http.Request) {
 	targetID := chi.URLParam(r, "userId")
-	callerID := auth.GetUserID(r)
+	callerID := auth.GetUserIDAsGUID(r.Context())
 
-	if targetID != callerID && !auth.IsAdmin(r) {
-		response.Error(w, http.StatusForbidden, "Access denied")
+	if targetID != callerID && !auth.IsAdminFromContext(r.Context()) {
+		response.WriteError(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
 	var cfg dto.UserConfigDto
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	b, _ := json.Marshal(cfg)
 	if err := h.userRepo.UpdateUser(targetID, "", string(b), ""); err != nil {
-		response.Error(w, http.StatusInternalServerError, "failed to update configuration")
+		response.WriteError(w, http.StatusInternalServerError, "failed to update configuration")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

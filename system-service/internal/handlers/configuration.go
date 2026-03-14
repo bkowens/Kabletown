@@ -5,12 +5,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 // GetConfiguration handles GET /System/Configuration.
 func (h *Handler) GetConfiguration(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"LogFileRetentionDays":              3,
 		"IsStartupWizardCompleted":          true,
 		"CachePath":                         "/cache",
@@ -79,7 +79,7 @@ func (h *Handler) UpdateConfiguration(w http.ResponseWriter, r *http.Request) {
 // GetNamedConfiguration handles GET /System/Configuration/{key}.
 func (h *Handler) GetNamedConfiguration(w http.ResponseWriter, r *http.Request) {
 	_ = chi.URLParam(r, "key")
-	response.JSON(w, http.StatusOK, map[string]interface{}{})
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{})
 }
 
 // UpdateNamedConfiguration handles POST /System/Configuration/{key}.

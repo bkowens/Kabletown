@@ -3,12 +3,12 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/bowens/kabletown/shared/response"
+	"github.com/jellyfinhanced/shared/response"
 )
 
 // GetSystemInfo handles GET /System/Info.
 func (h *Handler) GetSystemInfo(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"LocalAddress":                   "http://localhost:8080",
 		"StartupWizardCompleted":         true,
 		"Version":                        "10.10.0",
@@ -40,7 +40,7 @@ func (h *Handler) GetSystemInfo(w http.ResponseWriter, r *http.Request) {
 
 // GetPublicSystemInfo handles GET /System/Info/Public (no auth required).
 func (h *Handler) GetPublicSystemInfo(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"LocalAddress":           "http://localhost:8080",
 		"StartupWizardCompleted": true,
 		"Version":                "10.10.0",
@@ -53,7 +53,7 @@ func (h *Handler) GetPublicSystemInfo(w http.ResponseWriter, r *http.Request) {
 
 // Ping handles GET|POST /System/Ping.
 func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, "Jellyfin")
+	response.WriteJSON(w, http.StatusOK, "Jellyfin")
 }
 
 // Restart handles POST /System/Restart.
@@ -68,12 +68,12 @@ func (h *Handler) Shutdown(w http.ResponseWriter, r *http.Request) {
 
 // GetLogFiles handles GET /System/Logs.
 func (h *Handler) GetLogFiles(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, []interface{}{})
+	response.WriteJSON(w, http.StatusOK, []interface{}{})
 }
 
 // GetEndpointInfo handles GET /System/Endpoint.
 func (h *Handler) GetEndpointInfo(w http.ResponseWriter, r *http.Request) {
-	response.JSON(w, http.StatusOK, map[string]interface{}{
+	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"IsLocal":           true,
 		"IsInNetwork":       true,
 		"MaxStreamingBitrate": 140000000,
